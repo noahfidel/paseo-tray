@@ -95,7 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
         }
 
         if isDemo {
-            trayLog("Demo 模式启动")
+            trayLog("Demo mode started")
         }
     }
 
@@ -172,14 +172,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
         guard let appURL = NSWorkspace.shared.urlForApplication(
             withBundleIdentifier: "sh.paseo.desktop"
         ) else {
-            showAlert(title: "未找到 Paseo", message: "请确认 /Applications/Paseo.app 已安装。")
+            showAlert(title: L("Paseo Not Found", "未找到 Paseo"), message: L("Make sure /Applications/Paseo.app is installed.", "请确认 /Applications/Paseo.app 已安装。"))
             return
         }
         let configuration = NSWorkspace.OpenConfiguration()
         NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { _, error in
             if let error {
                 DispatchQueue.main.async {
-                    self.showAlert(title: "无法打开 Paseo", message: error.localizedDescription)
+                    self.showAlert(title: L("Can’t Open Paseo", "无法打开 Paseo"), message: error.localizedDescription)
                 }
             }
         }
@@ -193,7 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
                 menuController.setLoginItemError(nil)
             } catch {
                 menuController.setLoginItemError(error.localizedDescription)
-                showAlert(title: "关闭登录自启失败", message: error.localizedDescription)
+                showAlert(title: L("Couldn’t Disable Launch at Login", "关闭登录自启失败"), message: error.localizedDescription)
             }
         case .requiresApproval:
             menuController.setLoginItemError(nil)
@@ -207,7 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
                 }
             } catch {
                 menuController.setLoginItemError(error.localizedDescription)
-                showAlert(title: "开启登录自启失败", message: error.localizedDescription)
+                showAlert(title: L("Couldn’t Enable Launch at Login", "开启登录自启失败"), message: error.localizedDescription)
             }
         }
         refreshMenu()
@@ -236,7 +236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
 
     private func open(_ url: URL) {
         if !NSWorkspace.shared.open(url) {
-            trayLog("无法打开深链：\(url.absoluteString)")
+            trayLog("Couldn't open deep link: \(url.absoluteString)")
             NSSound.beep()
         }
     }
@@ -247,7 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
         alert.messageText = title
         alert.informativeText = message
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "好")
+        alert.addButton(withTitle: L("OK", "好"))
         alert.runModal()
     }
 }

@@ -43,7 +43,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         guard gate.accept(agentId: agentId, reason: reason, timestamp: timestamp) else { return }
         guard NotificationPolicy.shouldNotify(reason: reason, config: config) else { return }
         if isPaseoFrontmost() {
-            trayLog("Paseo 在前台，跳过通知：\(agentId) \(reason)")
+            trayLog("Paseo is in the foreground, skipping notification: \(agentId) \(reason)")
             return
         }
 
@@ -67,7 +67,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.unavailable = true
-                trayLog("通知发送失败，降级为 beep：\(error.localizedDescription)")
+                trayLog("Notification failed, falling back to beep: \(error.localizedDescription)")
                 self.fallback()
             }
         }
@@ -75,7 +75,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     func sendTestNotification() {
         guard let center else {
-            trayLog("通知不可用，改为 beep")
+            trayLog("Notifications unavailable, using beep")
             fallback()
             return
         }
@@ -90,7 +90,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 case .denied:
                     self.authorized = false
                     self.unavailable = true
-                    trayLog("测试通知被系统拒绝，改为 beep")
+                    trayLog("Test notification denied by the system, using beep")
                     self.fallback()
                 case .request:
                     self.requestAuthorization { granted in
@@ -108,7 +108,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     private func deliverTestNotification(center: UNUserNotificationCenter) {
         let content = UNMutableNotificationContent()
         content.title = "Paseo Tray"
-        content.body = "通知已启用。完成、失败和权限事件会显示在这里。"
+        content.body = L("Notifications are on. Finished, failed and permission events will show up here.", "通知已启用。完成、失败和权限事件会显示在这里。")
         content.threadIdentifier = "paseo-tray"
         content.sound = config.playSound ? .default : nil
         let request = UNNotificationRequest(
@@ -118,18 +118,18 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         )
         center.add(request) { error in
             if let error {
-                trayLog("测试通知失败：\(error.localizedDescription)")
+                trayLog("Test notification failed: \(error.localizedDescription)")
             } else {
-                trayLog("测试通知已提交")
+                trayLog("Test notification submitted")
             }
         }
     }
 
     private func title(for reason: String) -> String {
         switch reason {
-        case "finished": return "Agent 已完成"
-        case "error": return "Agent 出错"
-        case "permission": return "Agent 需要你的输入"
+        case "finished": return L("Agent finished", "Agent 已完成")
+        case "error": return L("Agent failed", "Agent 出错")
+        case "permission": return L("Agent needs your input", "Agent 需要你的输入")
         default: return "Paseo"
         }
     }
@@ -164,7 +164,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 case .denied:
                     self.authorized = false
                     self.unavailable = true
-                    trayLog("通知被系统拒绝，将使用 beep + 图标闪烁降级")
+                    trayLog("Notifications denied by the system, falling back to beep + icon flash")
                 case .request:
                     self.requestAuthorization { _ in }
                 }
@@ -189,9 +189,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 self.authorized = granted && error == nil
                 self.unavailable = !self.authorized
                 if let error {
-                    trayLog("通知授权失败：\(error.localizedDescription)")
+                    trayLog("Notification authorization failed: \(error.localizedDescription)")
                 } else if !granted {
-                    trayLog("通知未授权，将使用 beep + 图标闪烁降级")
+                    trayLog("Notifications not authorized, falling back to beep + icon flash")
                 }
                 completion(self.authorized)
             }

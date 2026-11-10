@@ -161,7 +161,7 @@ final class PaseoClient {
 
         serverId = discovery.serverId
         guard let url = URL(string: "ws://\(discovery.listen)/ws") else {
-            status = PaseoConnectionStatus(phase: .unsupported, detail: "daemon 地址无法转换为 WebSocket URL")
+            status = PaseoConnectionStatus(phase: .unsupported, detail: L("Can’t convert daemon address to a WebSocket URL", "daemon 地址无法转换为 WebSocket URL"))
             publishStatus()
             scheduleReconnect(delay: 30)
             return
@@ -237,7 +237,7 @@ final class PaseoClient {
             guard let self, self.generation == expected, self.status.phase == .connecting else {
                 return
             }
-            self.handleDisconnect("连接超时（10 秒）")
+            self.handleDisconnect(L("Connection timed out (10 s)", "连接超时（10 秒）"))
         }
         connectTimeoutWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: item)
@@ -256,7 +256,7 @@ final class PaseoClient {
         let watchdog = Timer(timeInterval: 10, repeats: true) { [weak self] _ in
             guard let self, self.task != nil else { return }
             if Date().timeIntervalSince(self.lastMessageAt) > 90 {
-                self.handleDisconnect("90 秒无消息")
+                self.handleDisconnect(L("No messages for 90 s", "90 秒无消息"))
             }
         }
         watchdogTimer = watchdog
@@ -298,11 +298,11 @@ final class PaseoClient {
         }
 
         guard let listen else {
-            throw DiscoveryError.missing("未找到 \(pidURL.path) 或 config.json 中的 daemon.listen")
+            throw DiscoveryError.missing(L("Couldn’t find \(pidURL.path) or daemon.listen in config.json", "未找到 \(pidURL.path) 或 config.json 中的 daemon.listen"))
         }
         let trimmed = listen.trimmingCharacters(in: .whitespacesAndNewlines)
         guard Self.isHostPort(trimmed) else {
-            throw DiscoveryError.unsupported("暂不支持该 daemon listen：\(trimmed)")
+            throw DiscoveryError.unsupported(L("Unsupported daemon listen address: \(trimmed)", "暂不支持该 daemon listen：\(trimmed)"))
         }
 
         let tokenURL = homeURL.appendingPathComponent("local-credential")
@@ -365,7 +365,7 @@ final class PaseoClient {
         guard JSONSerialization.isValidJSONObject(object),
               let data = try? JSONSerialization.data(withJSONObject: object),
               let text = String(data: data, encoding: .utf8) else {
-            trayLog("无法序列化 WebSocket 消息")
+            trayLog("Couldn't serialize WebSocket message")
             return
         }
         let currentGeneration = generation
@@ -373,7 +373,7 @@ final class PaseoClient {
             guard let error else { return }
             DispatchQueue.main.async {
                 guard let self, self.generation == currentGeneration else { return }
-                self.handleDisconnect("发送失败：\(error.localizedDescription)")
+                self.handleDisconnect(L("Send failed: \(error.localizedDescription)", "发送失败：\(error.localizedDescription)"))
             }
         }
     }
@@ -414,7 +414,7 @@ final class PaseoClient {
         let item = DispatchWorkItem { [weak self] in
             guard let self, self.status.phase == .connected,
                   self.agentsRequestId == requestId, !self.agentsAck else { return }
-            self.retryAgentsSubscription(error: "订阅超时")
+            self.retryAgentsSubscription(error: L("Subscription timed out", "订阅超时"))
         }
         agentsTimeoutWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + subscriptionTimeout, execute: item)
@@ -425,7 +425,7 @@ final class PaseoClient {
         let item = DispatchWorkItem { [weak self] in
             guard let self, self.status.phase == .connected,
                   self.eventsRequestId == requestId, !self.eventsAck else { return }
-            self.retryEventsSubscription(error: "事件订阅超时")
+            self.retryEventsSubscription(error: L("Event subscription timed out", "事件订阅超时"))
         }
         eventsTimeoutWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + subscriptionTimeout, execute: item)
@@ -434,10 +434,10 @@ final class PaseoClient {
     private func retryAgentsSubscription(error: String) {
         agentsRetryCount += 1
         guard agentsRetryCount <= maxSubscriptionRetries else {
-            handleDisconnect("订阅失败：\(error)")
+            handleDisconnect(L("Subscription failed: \(error)", "订阅失败：\(error)"))
             return
         }
-        status.subscriptionError = "\(error)，正在重试"
+        status.subscriptionError = L("\(error), retrying", "\(error)，正在重试")
         publishStatus()
         requestAgentsSubscription()
     }
@@ -445,10 +445,10 @@ final class PaseoClient {
     private func retryEventsSubscription(error: String) {
         eventsRetryCount += 1
         guard eventsRetryCount <= maxSubscriptionRetries else {
-            handleDisconnect("事件订阅失败：\(error)")
+            handleDisconnect(L("Event subscription failed: \(error)", "事件订阅失败：\(error)"))
             return
         }
-        status.subscriptionError = "\(error)，正在重试"
+        status.subscriptionError = L("\(error), retrying", "\(error)，正在重试")
         publishStatus()
         requestEventsSubscription()
     }
@@ -495,7 +495,7 @@ final class PaseoClient {
                 guard let self, self.started, self.generation == expected else { return }
                 switch result {
                 case .failure(let error):
-                    self.handleDisconnect("连接断开：\(error.localizedDescription)")
+                    self.handleDisconnect(L("Connection lost: \(error.localizedDescription)", "连接断开：\(error.localizedDescription)"))
                 case .success(let message):
                     self.lastMessageAt = Date()
                     switch message {
@@ -576,7 +576,7 @@ final class PaseoClient {
     private func handleRpcError(_ message: [String: Any]) {
         guard let payload = message["payload"] as? [String: Any],
               let requestId = payload["requestId"] as? String else { return }
-        let error = payload["error"] as? String ?? "请求失败"
+        let error = payload["error"] as? String ?? L("Request failed", "请求失败")
         if requestId == agentsRequestId {
             agentsTimeoutWorkItem?.cancel()
             agentsTimeoutWorkItem = nil
@@ -609,7 +609,7 @@ final class PaseoClient {
         eventsRequestId = nil
         status = PaseoConnectionStatus(
             phase: .connected,
-            detail: "已连接",
+            detail: L("Connected", "已连接"),
             serverVersion: payload["version"] as? String,
             subscriptionError: nil
         )
@@ -620,7 +620,7 @@ final class PaseoClient {
 
     private func handleFetchAgents(_ message: [String: Any]) {
         guard let payload = message["payload"] as? [String: Any] else {
-            retryAgentsSubscription(error: "订阅返回格式不正确")
+            retryAgentsSubscription(error: L("Unexpected subscription response format", "订阅返回格式不正确"))
             return
         }
         if let requestId = payload["requestId"] as? String,
@@ -632,9 +632,9 @@ final class PaseoClient {
             agentsTimeoutWorkItem?.cancel()
             agentsTimeoutWorkItem = nil
             agentsAck = false
-            status.subscriptionError = "订阅返回格式不正确"
+            status.subscriptionError = L("Unexpected subscription response format", "订阅返回格式不正确")
             publishStatus()
-            retryAgentsSubscription(error: "订阅返回格式不正确")
+            retryAgentsSubscription(error: L("Unexpected subscription response format", "订阅返回格式不正确"))
             return
         }
         markAgentsAck()
@@ -654,19 +654,19 @@ final class PaseoClient {
         case "password_required", "incorrect_password":
             status = PaseoConnectionStatus(
                 phase: .authRequired,
-                detail: "需要密码。请在 Paseo 中打开本机 daemon 后重试。"
+                detail: L("Password required. Start the local daemon in Paseo and try again.", "需要密码。请在 Paseo 中打开本机 daemon 后重试。")
             )
             publishStatus()
             scheduleReconnect(delay: 30)
         case "incompatible_protocol":
             status = PaseoConnectionStatus(
                 phase: .unsupported,
-                detail: "daemon 与托盘的协议版本不兼容"
+                detail: L("Daemon and tray protocol versions are incompatible", "daemon 与托盘的协议版本不兼容")
             )
             publishStatus()
             scheduleReconnect(delay: 30)
         default:
-            status = PaseoConnectionStatus(phase: .offline, detail: "连接被拒绝：\(reason)")
+            status = PaseoConnectionStatus(phase: .offline, detail: L("Connection refused: \(reason)", "连接被拒绝：\(reason)"))
             publishStatus()
             scheduleReconnect(delay: nextBackoff())
         }

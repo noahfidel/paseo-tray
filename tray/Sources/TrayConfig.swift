@@ -77,7 +77,7 @@ final class TrayConfigStore {
         do {
             let data = try Data(contentsOf: fileURL)
             guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                throw ConfigError.invalid("根节点不是 JSON 对象")
+                throw ConfigError.invalid(L("Root is not a JSON object", "根节点不是 JSON 对象"))
             }
             lastError = nil
             var config = TrayConfig.defaults
@@ -90,7 +90,7 @@ final class TrayConfigStore {
             config.includeSubagents = bool(object, "includeSubagents", config.includeSubagents)
             return (config, lastError)
         } catch {
-            let message = "配置读取失败：\(error.localizedDescription)"
+            let message = L("Failed to read config: \(error.localizedDescription)", "配置读取失败：\(error.localizedDescription)")
             lastError = message
             return (.defaults, message)
         }
@@ -103,7 +103,7 @@ final class TrayConfigStore {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(TrayConfig.defaults)
         try data.write(to: fileURL, options: [.atomic])
-        trayLog("已创建默认配置：\(displayPath)")
+        trayLog("Created default config: \(displayPath)")
     }
 
     func startWatching(_ handler: @escaping (TrayConfig, String?) -> Void) {
@@ -131,7 +131,7 @@ final class TrayConfigStore {
     private func bool(_ object: [String: Any], _ key: String, _ fallback: Bool) -> Bool {
         if let value = object[key] as? Bool { return value }
         if object[key] != nil {
-            lastError = "配置字段 \(key) 类型不正确，已使用默认值"
+            lastError = L("Config field \(key) has the wrong type, using default", "配置字段 \(key) 类型不正确，已使用默认值")
         }
         return fallback
     }
@@ -141,7 +141,7 @@ final class TrayConfigStore {
             try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
             let fd = open(directoryURL.path, O_EVTONLY)
             guard fd >= 0 else {
-                throw ConfigError.invalid("无法监听配置目录")
+                throw ConfigError.invalid(L("Can’t watch config directory", "无法监听配置目录"))
             }
             let source = DispatchSource.makeFileSystemObjectSource(
                 fileDescriptor: fd,
@@ -163,7 +163,7 @@ final class TrayConfigStore {
             self.source = source
             self.directoryFD = fd
         } catch {
-            trayLog("配置目录监听失败：\(error.localizedDescription)")
+            trayLog("Config directory watch failed: \(error.localizedDescription)")
         }
     }
 

@@ -171,9 +171,9 @@ final class MenuController {
                 font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
             )
         }
-        var tip = "Paseo Tray · \(counts.running) 运行中 · \(counts.finished) 已完成"
+        var tip = L("Paseo Tray · \(counts.running) running · \(counts.finished) finished", "Paseo Tray · \(counts.running) 运行中 · \(counts.finished) 已完成")
         if counts.actionable > 0 {
-            tip += " · \(counts.actionable) 需要处理"
+            tip += L(" · \(counts.actionable) need attention", " · \(counts.actionable) 需要处理")
         }
         if let subscriptionError = connection.subscriptionError {
             tip += " · \(subscriptionError)"
@@ -207,43 +207,43 @@ final class MenuController {
                 addDisabled(connection.detail)
             }
             if connection.phase == .authRequired {
-                addAction("打开 Paseo", action: #selector(openPaseo))
+                addAction(L("Open Paseo", "打开 Paseo"), action: #selector(openPaseo))
             }
             if connection.phase == .unsupported {
-                addDisabled("v1 仅支持 host:port 形式的 daemon listen")
+                addDisabled(L("v1 only supports host:port daemon listen addresses", "v1 仅支持 host:port 形式的 daemon listen"))
             }
         } else {
             if let subscriptionError = connection.subscriptionError {
-                addDisabled("订阅失败：\(subscriptionError)")
+                addDisabled(L("Subscription failed: \(subscriptionError)", "订阅失败：\(subscriptionError)"))
             }
             let sections = store.sections(config: config)
             if sections.isEmpty {
-                addDisabled("暂无 agent")
+                addDisabled(L("No Agents", "暂无 agent"))
             } else {
                 if !sections.needsInput.isEmpty {
-                    addHeader("需要你处理")
+                    addHeader(L("Needs Input", "需要你处理"))
                     addAgents(sections.needsInput, color: .systemOrange)
                 }
                 if !sections.failed.isEmpty {
-                    addHeader("失败")
+                    addHeader(L("Failed", "失败"))
                     addAgents(sections.failed, color: .systemRed)
                 }
                 if !sections.running.isEmpty {
-                    addHeader("运行中")
+                    addHeader(L("Running", "运行中"))
                     addAgents(sections.running, color: .systemGreen)
                 }
                 if !sections.attention.isEmpty {
-                    addHeader("已完成")
+                    addHeader(L("Finished", "已完成"))
                     addAgents(sections.attention, color: .secondaryLabelColor)
                 }
                 if store.hasMore {
-                    addDisabled("只显示前 200 个")
+                    addDisabled(L("Showing first 200 only", "只显示前 200 个"))
                 }
             }
         }
 
         menu.addItem(.separator())
-        addAction("打开 Paseo", action: #selector(openPaseo))
+        addAction(L("Open Paseo", "打开 Paseo"), action: #selector(openPaseo))
 
         let loginItem = NSMenuItem(
             title: loginItemTitle(),
@@ -253,15 +253,15 @@ final class MenuController {
         loginItem.target = self
         loginItem.state = LoginItem.isEnabled ? .on : (LoginItem.requiresApproval ? .mixed : .off)
         if let loginItemError {
-            loginItem.title = "登录时启动（失败）"
+            loginItem.title = L("Launch at Login (Failed)", "登录时启动（失败）")
             loginItem.isEnabled = false
             loginItem.toolTip = loginItemError
         }
         menu.addItem(loginItem)
 
-        addAction("托盘设置…", action: #selector(revealConfig))
+        addAction(L("Tray Settings…", "托盘设置…"), action: #selector(revealConfig))
         menu.addItem(.separator())
-        let quit = NSMenuItem(title: "退出", action: #selector(quit), keyEquivalent: "q")
+        let quit = NSMenuItem(title: L("Quit", "退出"), action: #selector(quit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
 
@@ -281,19 +281,19 @@ final class MenuController {
 
     private func connectionHeaderTitle() -> String {
         switch connection.phase {
-        case .offline: return "Paseo 未连接"
-        case .connecting: return "正在连接 Paseo…"
+        case .offline: return L("Paseo Not Connected", "Paseo 未连接")
+        case .connecting: return L("Connecting to Paseo…", "正在连接 Paseo…")
         case .connected: return "Paseo"
-        case .authRequired: return "需要密码"
-        case .unsupported: return "不支持的连接"
+        case .authRequired: return L("Password Required", "需要密码")
+        case .unsupported: return L("Unsupported Connection", "不支持的连接")
         }
     }
 
     private func loginItemTitle() -> String {
         switch LoginItem.status {
-        case .enabled: return "登录时启动"
-        case .requiresApproval: return "登录时启动（需在系统设置中批准）"
-        default: return "登录时启动"
+        case .enabled: return L("Launch at Login", "登录时启动")
+        case .requiresApproval: return L("Launch at Login (Approve in System Settings)", "登录时启动（需在系统设置中批准）")
+        default: return L("Launch at Login", "登录时启动")
         }
     }
 

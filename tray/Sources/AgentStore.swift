@@ -28,11 +28,11 @@ enum AgentBucket: String {
 
     var sectionTitle: String {
         switch self {
-        case .needsInput: return "需要你处理"
-        case .failed: return "失败"
-        case .running: return "运行中"
-        case .attention: return "已完成"
-        case .done: return "已完成"
+        case .needsInput: return L("Needs input", "需要你处理")
+        case .failed: return L("Failed", "失败")
+        case .running: return L("Running", "运行中")
+        case .attention: return L("Finished", "已完成")
+        case .done: return L("Finished", "已完成")
         }
     }
 
