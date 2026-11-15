@@ -3,7 +3,8 @@ import Foundation
 
 /// Floating panel for talking to a paseo-bots bot from the tray.
 /// Prompt mode: type a first message, send it, and the caller opens the new chat in Paseo.
-/// More modes (Quick Ask) are added as `Mode` cases.
+/// Quick Ask mode: pick a bot, ask, and the reply streams into the panel; follow-ups continue
+/// that chat. The panel never opens Paseo itself; only "Open in Paseo" asks the caller to.
 final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     enum Mode {
         case prompt(bot: TrayBot)
@@ -12,14 +13,34 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
 
     static let maxPromptLength = 20_000
 
-    /// Called with the bot and the validated (trimmed, 1...20,000 characters) prompt.
+    /// Prompt mode: called with the bot and the validated (trimmed, 1...20,000 UTF-16 units) prompt.
     var onSubmit: ((TrayBot, String) -> Void)?
-    /// Supplies the avatar shown in the header.
+    /// Quick Ask: first question to the picked bot (validated like `onSubmit`).
+    var onAsk: ((TrayBot, String) -> Void)?
+    /// Quick Ask: a follow-up in the chat that `chatStarted` began. Call `clearFollowUp` once sent.
+    var onFollowUp: ((String) -> Void)?
+    var onStop: (() -> Void)?
+    var onOpenInPaseo: (() -> Void)?
+    /// The panel closed or was reset for a new mode; any chat it showed is over.
+    var onClose: (() -> Void)?
+    /// Supplies bot avatars (header, picker).
     var avatarProvider: ((TrayBot) -> NSImage)?
 
     private(set) var mode: Mode?
     private(set) var isSending = false
+    /// Changes whenever the panel is reset or closed, so a late reply for an older send is ignored.
+    private(set) var session = 0
+    /// The agent whose chat Quick Ask is showing.
+    private(set) var chatAgentId: String?
 
+    /// True while Quick Ask is on screen (whether or not a chat has started).
+    var isQuickAskVisible: Bool {
+        if case .quickAsk? = mode { return isVisible }
+        return false
+    }
+
+    // Prompt mode
+    private let promptContent = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 230))
     private let avatarView = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let textView = NSTextView()
@@ -29,10 +50,38 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     private let sendButton = NSButton(title: "", target: nil, action: nil)
     private var currentBot: TrayBot?
 
+    // Quick Ask mode
+    private let quickContent = NSView(frame: NSRect(x: 0, y: 0, width: 520, height: 250))
+    private let botPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let headerOpenButton = NSButton(title: "", target: nil, action: nil)
+    private let transcript = ChatTranscriptView(frame: .zero)
+    private let banner = NSBox()
+    private let bannerLabel = NSTextField(labelWithString: "")
+    private let bannerButton = NSButton(title: "", target: nil, action: nil)
+    private let inputTextView = NSTextView()
+    private let inputScroll = NSScrollView()
+    private let quickErrorLabel = NSTextField(wrappingLabelWithString: "")
+    private let quickHintLabel = NSTextField(labelWithString: "")
+    private let quickSendButton = NSButton(title: "", target: nil, action: nil)
+    private let stopButton = NSButton(title: "", target: nil, action: nil)
+    private var bots: [TrayBot] = []
+    private var turnRunning = false
+    private var preChatConstraints: [NSLayoutConstraint] = []
+    private var chatConstraints: [NSLayoutConstraint] = []
+    private var bannerShownConstraints: [NSLayoutConstraint] = []
+    private var bannerHiddenConstraints: [NSLayoutConstraint] = []
+    private var errorShownConstraints: [NSLayoutConstraint] = []
+    private var errorHiddenConstraints: [NSLayoutConstraint] = []
+
+    private static let promptStyle: NSWindow.StyleMask = [.titled, .closable, .nonactivatingPanel, .utilityWindow]
+    private static let quickAskStyle: NSWindow.StyleMask = promptStyle.union(.resizable)
+    private static let quickAskSize = NSSize(width: 520, height: 250)
+    private static let quickChatSize = NSSize(width: 520, height: 560)
+
     init() {
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 480, height: 230),
-            styleMask: [.titled, .closable, .nonactivatingPanel, .utilityWindow],
+            styleMask: Self.promptStyle,
             backing: .buffered,
             defer: true
         )
@@ -41,7 +90,9 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         isReleasedWhenClosed = false
         isMovableByWindowBackground = true
         collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-        buildContent()
+        buildPromptContent()
+        buildQuickContent()
+        contentView = promptContent
     }
 
     override var canBecomeKey: Bool { true }
@@ -50,14 +101,35 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         close()
     }
 
+    override func close() {
+        super.close()
+        session += 1
+        isSending = false
+        chatAgentId = nil
+        onClose?()
+    }
+
     // MARK: - Presenting
 
     func present(mode: Mode) {
-        // Don't clobber a send that is still in flight.
-        if isSending { orderFront(nil); return }
+        // Quick Ask already on screen: bring it forward as it is (keeps a chat in progress).
+        if case .quickAsk = mode, isQuickAskVisible {
+            NSApp.activate(ignoringOtherApps: true)
+            makeKeyAndOrderFront(nil)
+            makeFirstResponder(inputTextView)
+            return
+        }
+        // Any earlier send (even one still in flight) belongs to the old session now.
+        session += 1
+        if chatAgentId != nil {
+            chatAgentId = nil
+            onClose?()
+        }
         self.mode = mode
         switch mode {
         case .prompt(let bot):
+            styleMask = Self.promptStyle
+            contentView = promptContent
             currentBot = bot
             title = L("New chat", "新建对话")
             nameLabel.stringValue = bot.name
@@ -68,40 +140,185 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
             sendButton.title = L("Send", "发送")
             hintLabel.stringValue = L("Enter to send, Shift-Enter for a new line", "回车发送，Shift-回车换行")
             setSending(false)
+            positionNearTop(contentSize: NSSize(width: 480, height: 230))
         case .quickAsk:
-            // Not presented yet; added with the Quick Ask task.
-            return
+            styleMask = Self.quickAskStyle
+            contentView = quickContent
+            title = L("Quick Ask", "快速提问")
+            resetQuickAsk()
+            positionNearTop(contentSize: Self.quickAskSize)
         }
-        positionNearTop()
         // The panel can become key without making the tray the active app, but a tray
         // (accessory) app often won't route typing to it unless it is active. Activating
         // the tray itself does not bring Paseo forward.
         NSApp.activate(ignoringOtherApps: true)
         makeKeyAndOrderFront(nil)
-        makeFirstResponder(textView)
+        if case .quickAsk = mode {
+            makeFirstResponder(inputTextView)
+        } else {
+            makeFirstResponder(textView)
+        }
     }
 
     func showError(_ message: String) {
+        if case .quickAsk? = mode {
+            quickErrorLabel.stringValue = message
+            setQuickErrorVisible(true)
+            return
+        }
         errorLabel.stringValue = message
         errorLabel.isHidden = false
         resizeForError()
     }
 
+    func clearError() {
+        if case .quickAsk? = mode {
+            quickErrorLabel.stringValue = ""
+            setQuickErrorVisible(false)
+            return
+        }
+        guard !errorLabel.isHidden else { return }
+        errorLabel.stringValue = ""
+        errorLabel.isHidden = true
+        resizeForError()
+    }
+
     func setSending(_ sending: Bool) {
         isSending = sending
+        if sending { clearError() }
+        if case .quickAsk? = mode {
+            updateQuickControls()
+            return
+        }
         sendButton.isEnabled = !sending
         textView.isEditable = !sending
-        if sending {
-            errorLabel.stringValue = ""
-            errorLabel.isHidden = true
+    }
+
+    // MARK: - Quick Ask
+
+    /// Fills the bot picker (already in the order to show). An empty list leaves Ask disabled.
+    func setBots(_ bots: [TrayBot]) {
+        self.bots = bots
+        botPopup.removeAllItems()
+        if bots.isEmpty {
+            botPopup.addItem(withTitle: L("No bots", "没有机器人"))
+            botPopup.lastItem?.isEnabled = false
+        } else {
+            for bot in bots {
+                let item = NSMenuItem(title: bot.name, action: nil, keyEquivalent: "")
+                item.representedObject = bot.id
+                item.image = avatarProvider?(bot)
+                if !bot.title.isEmpty { item.toolTip = bot.title }
+                botPopup.menu?.addItem(item)
+            }
+            botPopup.selectItem(at: 0)
         }
+        updateQuickControls()
+    }
+
+    /// Re-reads avatars, for when a remote avatar image finished loading.
+    func refreshAvatars() {
+        if let currentBot, case .prompt? = mode { avatarView.image = avatarProvider?(currentBot) }
+        for item in botPopup.itemArray {
+            guard let id = item.representedObject as? String, let bot = bots.first(where: { $0.id == id }) else { continue }
+            item.image = avatarProvider?(bot)
+        }
+    }
+
+    /// The first question started a chat: switch to the transcript and follow-up box.
+    func chatStarted(agentId: String) {
+        guard case .quickAsk? = mode else { return }
+        chatAgentId = agentId
+        inputTextView.string = ""
+        turnRunning = false
+        transcript.update(rows: [])
+        NSLayoutConstraint.deactivate(preChatConstraints)
+        NSLayoutConstraint.activate(chatConstraints)
+        transcript.isHidden = false
+        headerOpenButton.isHidden = false
+        botPopup.isEnabled = false
+        setBannerVisible(false)
+        contentMinSize = NSSize(width: 420, height: 380)
+        resizeKeepingTop(contentSize: Self.quickChatSize)
+        updateQuickControls()
+        makeFirstResponder(inputTextView)
+    }
+
+    func render(_ state: TimelineState) {
+        guard case .quickAsk? = mode, chatAgentId != nil else { return }
+        transcript.update(rows: state.rows)
+        let hasUnsupported = state.rows.contains { if case .unsupported = $0 { return true } else { return false } }
+        if state.pendingPermission {
+            bannerLabel.stringValue = L("Waiting for your approval", "等待你的批准")
+        } else if hasUnsupported {
+            bannerLabel.stringValue = L("Some items can only be shown in Paseo", "部分内容只能在 Paseo 中查看")
+        }
+        setBannerVisible(state.pendingPermission || hasUnsupported)
+        turnRunning = state.turn == .running
+        updateQuickControls()
+    }
+
+    /// The follow-up went out; empty the box.
+    func clearFollowUp() {
+        inputTextView.string = ""
+    }
+
+    private func resetQuickAsk() {
+        chatAgentId = nil
+        turnRunning = false
+        bots = []
+        botPopup.removeAllItems()
+        botPopup.addItem(withTitle: L("Loading bots…", "正在加载机器人…"))
+        botPopup.lastItem?.isEnabled = false
+        botPopup.isEnabled = true
+        inputTextView.string = ""
+        transcript.update(rows: [])
+        transcript.isHidden = true
+        headerOpenButton.isHidden = true
+        NSLayoutConstraint.deactivate(chatConstraints)
+        NSLayoutConstraint.activate(preChatConstraints)
+        setBannerVisible(false)
+        quickErrorLabel.stringValue = ""
+        setQuickErrorVisible(false)
+        quickHintLabel.stringValue = L("Enter to send, Shift-Enter for a new line", "回车发送，Shift-回车换行")
+        quickSendButton.title = L("Ask", "提问")
+        contentMinSize = NSSize(width: 420, height: 200)
+        isSending = false
+        updateQuickControls()
+    }
+
+    private var selectedBot: TrayBot? {
+        guard let id = botPopup.selectedItem?.representedObject as? String else { return nil }
+        return bots.first { $0.id == id }
+    }
+
+    private func updateQuickControls() {
+        let inChat = chatAgentId != nil
+        quickSendButton.title = inChat ? L("Send", "发送") : L("Ask", "提问")
+        let showStop = inChat && turnRunning
+        stopButton.isHidden = !showStop
+        quickSendButton.isHidden = showStop
+        quickSendButton.isEnabled = !isSending && (inChat || selectedBot != nil)
+        inputTextView.isEditable = !isSending
+        botPopup.isEnabled = !inChat && !isSending && !bots.isEmpty
+    }
+
+    private func setBannerVisible(_ visible: Bool) {
+        banner.isHidden = !visible
+        NSLayoutConstraint.deactivate(visible ? bannerHiddenConstraints : bannerShownConstraints)
+        NSLayoutConstraint.activate(visible ? bannerShownConstraints : bannerHiddenConstraints)
+    }
+
+    private func setQuickErrorVisible(_ visible: Bool) {
+        quickErrorLabel.isHidden = !visible
+        NSLayoutConstraint.deactivate(visible ? errorHiddenConstraints : errorShownConstraints)
+        NSLayoutConstraint.activate(visible ? errorShownConstraints : errorHiddenConstraints)
     }
 
     // MARK: - Layout
 
-    private func buildContent() {
-        let content = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 230))
-        contentView = content
+    private func buildPromptContent() {
+        let content = promptContent
 
         avatarView.translatesAutoresizingMaskIntoConstraints = false
         avatarView.imageScaling = .scaleProportionallyUpOrDown
@@ -109,22 +326,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         nameLabel.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
         nameLabel.lineBreakMode = .byTruncatingTail
 
-        textView.delegate = self
-        textView.isRichText = false
-        textView.allowsUndo = true
-        textView.font = NSFont.systemFont(ofSize: 14)
-        textView.isAutomaticQuoteSubstitutionEnabled = false
-        textView.isAutomaticDashSubstitutionEnabled = false
-        textView.textContainerInset = NSSize(width: 6, height: 6)
-        textView.autoresizingMask = [.width]
-        textView.isVerticallyResizable = true
-        textView.isHorizontallyResizable = false
-        textView.textContainer?.widthTracksTextView = true
-
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.documentView = textView
-        scrollView.hasVerticalScroller = true
-        scrollView.borderType = .bezelBorder
+        configureInput(textView, in: scrollView)
 
         errorLabel.translatesAutoresizingMaskIntoConstraints = false
         errorLabel.textColor = .systemRed
@@ -173,25 +375,190 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         ])
     }
 
-    /// Grows the panel so a wrapped error stays fully visible.
+    private func configureInput(_ textView: NSTextView, in scrollView: NSScrollView) {
+        textView.delegate = self
+        textView.isRichText = false
+        textView.allowsUndo = true
+        textView.font = NSFont.systemFont(ofSize: 14)
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.textContainerInset = NSSize(width: 6, height: 6)
+        textView.autoresizingMask = [.width]
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.textContainer?.widthTracksTextView = true
+
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.documentView = textView
+        scrollView.hasVerticalScroller = true
+        scrollView.borderType = .bezelBorder
+    }
+
+    private func buildQuickContent() {
+        let content = quickContent
+
+        botPopup.translatesAutoresizingMaskIntoConstraints = false
+        botPopup.target = self
+        botPopup.action = #selector(botChanged)
+
+        headerOpenButton.translatesAutoresizingMaskIntoConstraints = false
+        headerOpenButton.title = L("Open in Paseo", "在 Paseo 中打开")
+        headerOpenButton.isBordered = false
+        headerOpenButton.contentTintColor = .linkColor
+        headerOpenButton.font = NSFont.systemFont(ofSize: 12)
+        headerOpenButton.target = self
+        headerOpenButton.action = #selector(openInPaseoTapped)
+        headerOpenButton.isHidden = true
+        headerOpenButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        transcript.translatesAutoresizingMaskIntoConstraints = false
+        transcript.isHidden = true
+
+        banner.translatesAutoresizingMaskIntoConstraints = false
+        banner.boxType = .custom
+        banner.titlePosition = .noTitle
+        banner.cornerRadius = 6
+        banner.borderWidth = 1
+        banner.borderColor = NSColor.systemYellow
+        banner.fillColor = NSColor.systemYellow.withAlphaComponent(0.2)
+        banner.contentViewMargins = NSSize(width: 10, height: 6)
+        banner.isHidden = true
+        bannerLabel.translatesAutoresizingMaskIntoConstraints = false
+        bannerLabel.font = NSFont.systemFont(ofSize: 12)
+        bannerLabel.lineBreakMode = .byTruncatingTail
+        bannerLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        bannerButton.translatesAutoresizingMaskIntoConstraints = false
+        bannerButton.title = L("Open in Paseo", "在 Paseo 中打开")
+        bannerButton.bezelStyle = .rounded
+        bannerButton.controlSize = .small
+        bannerButton.target = self
+        bannerButton.action = #selector(openInPaseoTapped)
+        if let bannerContent = banner.contentView {
+            bannerContent.addSubview(bannerLabel)
+            bannerContent.addSubview(bannerButton)
+            NSLayoutConstraint.activate([
+                bannerLabel.leadingAnchor.constraint(equalTo: bannerContent.leadingAnchor),
+                bannerLabel.centerYAnchor.constraint(equalTo: bannerContent.centerYAnchor),
+                bannerButton.leadingAnchor.constraint(greaterThanOrEqualTo: bannerLabel.trailingAnchor, constant: 8),
+                bannerButton.trailingAnchor.constraint(equalTo: bannerContent.trailingAnchor),
+                bannerButton.topAnchor.constraint(equalTo: bannerContent.topAnchor),
+                bannerButton.bottomAnchor.constraint(equalTo: bannerContent.bottomAnchor),
+            ])
+        }
+
+        configureInput(inputTextView, in: inputScroll)
+
+        quickErrorLabel.translatesAutoresizingMaskIntoConstraints = false
+        quickErrorLabel.textColor = .systemRed
+        quickErrorLabel.font = NSFont.systemFont(ofSize: 12)
+        quickErrorLabel.isHidden = true
+        quickErrorLabel.preferredMaxLayoutWidth = 480
+
+        quickHintLabel.translatesAutoresizingMaskIntoConstraints = false
+        quickHintLabel.font = NSFont.systemFont(ofSize: 11)
+        quickHintLabel.textColor = .secondaryLabelColor
+        quickHintLabel.lineBreakMode = .byTruncatingTail
+        quickHintLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        quickSendButton.translatesAutoresizingMaskIntoConstraints = false
+        quickSendButton.bezelStyle = .rounded
+        quickSendButton.keyEquivalent = ""
+        quickSendButton.target = self
+        quickSendButton.action = #selector(sendTapped)
+
+        stopButton.translatesAutoresizingMaskIntoConstraints = false
+        stopButton.title = L("Stop", "停止")
+        stopButton.bezelStyle = .rounded
+        stopButton.target = self
+        stopButton.action = #selector(stopTapped)
+        stopButton.isHidden = true
+
+        for view in [botPopup, headerOpenButton, transcript, banner, inputScroll, quickErrorLabel,
+                     quickHintLabel, quickSendButton, stopButton] as [NSView] {
+            content.addSubview(view)
+        }
+
+        let margin: CGFloat = 16
+        NSLayoutConstraint.activate([
+            botPopup.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: margin),
+            botPopup.topAnchor.constraint(equalTo: content.topAnchor, constant: 14),
+            botPopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
+            botPopup.trailingAnchor.constraint(lessThanOrEqualTo: headerOpenButton.leadingAnchor, constant: -8),
+
+            headerOpenButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -margin),
+            headerOpenButton.centerYAnchor.constraint(equalTo: botPopup.centerYAnchor),
+
+            transcript.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: margin),
+            transcript.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -margin),
+            transcript.topAnchor.constraint(equalTo: botPopup.bottomAnchor, constant: 10),
+
+            banner.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: margin),
+            banner.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -margin),
+
+            inputScroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: margin),
+            inputScroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -margin),
+            inputScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+
+            quickErrorLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: margin),
+            quickErrorLabel.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -margin),
+
+            quickHintLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: margin),
+            quickHintLabel.centerYAnchor.constraint(equalTo: quickSendButton.centerYAnchor),
+            quickHintLabel.trailingAnchor.constraint(lessThanOrEqualTo: stopButton.leadingAnchor, constant: -8),
+
+            quickSendButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -margin),
+            quickSendButton.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -14),
+            stopButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -margin),
+            stopButton.centerYAnchor.constraint(equalTo: quickSendButton.centerYAnchor),
+        ])
+
+        // Before the first question the transcript collapses and the prompt box fills the panel;
+        // in a chat the transcript fills it and the follow-up box is a fixed strip.
+        preChatConstraints = [
+            transcript.heightAnchor.constraint(equalToConstant: 0),
+        ]
+        chatConstraints = [
+            transcript.heightAnchor.constraint(greaterThanOrEqualToConstant: 120),
+            inputScroll.heightAnchor.constraint(equalToConstant: 56),
+        ]
+        bannerShownConstraints = [
+            banner.topAnchor.constraint(equalTo: transcript.bottomAnchor, constant: 8),
+            inputScroll.topAnchor.constraint(equalTo: banner.bottomAnchor, constant: 8),
+        ]
+        bannerHiddenConstraints = [
+            inputScroll.topAnchor.constraint(equalTo: transcript.bottomAnchor, constant: 8),
+            banner.topAnchor.constraint(equalTo: inputScroll.topAnchor),
+        ]
+        errorShownConstraints = [
+            quickErrorLabel.topAnchor.constraint(equalTo: inputScroll.bottomAnchor, constant: 6),
+            quickSendButton.topAnchor.constraint(equalTo: quickErrorLabel.bottomAnchor, constant: 8),
+        ]
+        errorHiddenConstraints = [
+            quickSendButton.topAnchor.constraint(equalTo: inputScroll.bottomAnchor, constant: 10),
+            quickErrorLabel.topAnchor.constraint(equalTo: quickSendButton.topAnchor),
+        ]
+        NSLayoutConstraint.activate(preChatConstraints + bannerHiddenConstraints + errorHiddenConstraints)
+    }
+
+    /// Grows the prompt-mode panel so a wrapped error stays fully visible, and shrinks it back once cleared.
     private func resizeForError() {
-        guard let content = contentView else { return }
+        guard case .prompt? = mode, let content = contentView else { return }
         content.layoutSubtreeIfNeeded()
-        let fitting = content.fittingSize
-        let baseHeight: CGFloat = 230
-        let height = max(baseHeight, fitting.height)
+        let height = max(230, content.fittingSize.height)
+        resizeKeepingTop(contentSize: NSSize(width: 480, height: height))
+    }
+
+    private func resizeKeepingTop(contentSize: NSSize) {
         let frame = self.frame
-        let contentRect = NSRect(x: 0, y: 0, width: 480, height: height)
-        let newFrame = frameRect(forContentRect: contentRect)
+        let newFrame = frameRect(forContentRect: NSRect(origin: .zero, size: contentSize))
         setFrame(
             NSRect(x: frame.minX, y: frame.maxY - newFrame.height, width: newFrame.width, height: newFrame.height),
             display: true
         )
     }
 
-    private func positionNearTop() {
-        let contentRect = NSRect(x: 0, y: 0, width: 480, height: 230)
-        let size = frameRect(forContentRect: contentRect).size
+    private func positionNearTop(contentSize: NSSize) {
+        let size = frameRect(forContentRect: NSRect(origin: .zero, size: contentSize)).size
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
         guard let visible = screen?.visibleFrame else { return }
@@ -206,15 +573,45 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         submit()
     }
 
-    private func submit() {
-        guard !isSending, case .prompt(let bot)? = mode else { return }
-        let text = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.isEmpty { return }
-        if text.count > Self.maxPromptLength {
+    @objc private func stopTapped() {
+        onStop?()
+    }
+
+    @objc private func openInPaseoTapped() {
+        onOpenInPaseo?()
+    }
+
+    @objc private func botChanged() {
+        updateQuickControls()
+    }
+
+    /// Trimmed text if it is 1...20,000 UTF-16 units; shows the length error otherwise.
+    private func validated(_ raw: String) -> String? {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty { return nil }
+        if text.utf16.count > Self.maxPromptLength {
             showError(L("Prompt is too long (max 20,000 characters)", "提示过长（最多 20,000 个字符）"))
-            return
+            return nil
         }
-        onSubmit?(bot, text)
+        return text
+    }
+
+    private func submit() {
+        guard !isSending, let mode else { return }
+        switch mode {
+        case .prompt(let bot):
+            guard let text = validated(textView.string) else { return }
+            onSubmit?(bot, text)
+        case .quickAsk:
+            if chatAgentId != nil {
+                // One turn at a time: Enter does nothing while the bot is answering.
+                guard !turnRunning, let text = validated(inputTextView.string) else { return }
+                onFollowUp?(text)
+            } else {
+                guard let bot = selectedBot, let text = validated(inputTextView.string) else { return }
+                onAsk?(bot, text)
+            }
+        }
     }
 
     // MARK: - NSTextViewDelegate
@@ -231,5 +628,12 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
             return true
         }
         return false
+    }
+}
+
+extension BotRecents {
+    /// Bots in Quick Ask's picker order: last used first, then API order.
+    static func ordered(_ bots: [TrayBot]) -> [TrayBot] {
+        order(bots, recent: recentIds(), id: { $0.id })
     }
 }

@@ -22,6 +22,8 @@ fixturesDirectory = CommandLine.arguments[1]
 
 runTimelineReducerTests()
 runTimelineClientTests()
+runChatMarkdownTests()
+runBotRecentsTests()
 
 if failureCount == 0 {
     print("ALL \(testCount) TESTS PASSED")

@@ -5,7 +5,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
     private let isDemo: Bool
     private let store = AgentStore()
     private let botsClient = BotsClient()
+    private var quickAskPanelCreated = false
     private lazy var quickAskPanel: QuickAskPanel = {
+        quickAskPanelCreated = true
         let panel = QuickAskPanel()
         panel.avatarProvider = { [weak self] bot in
             self?.botsClient.avatarImage(for: bot) ?? NSImage()
@@ -13,12 +15,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
         panel.onSubmit = { [weak self] bot, prompt in
             self?.submitPrompt(bot: bot, prompt: prompt)
         }
+        panel.onAsk = { [weak self] bot, prompt in
+            self?.askBot(bot, prompt: prompt)
+        }
+        panel.onFollowUp = { [weak self] text in
+            self?.sendFollowUp(text)
+        }
+        panel.onStop = { [weak self] in
+            self?.timelineClient.stop()
+        }
+        panel.onOpenInPaseo = { [weak self] in
+            self?.openQuickAskChat()
+        }
+        panel.onClose = { [weak self] in
+            self?.timelineClient.stopWatching()
+        }
         return panel
     }()
     /// Streams one agent's timeline over the same daemon connection (the Quick Ask panel drives it).
-    private(set) lazy var timelineClient = TimelineClient(send: { [weak self] message in
-        self?.client?.sendSessionMessage(message) ?? false
-    })
+    private(set) lazy var timelineClient: TimelineClient = {
+        let timeline = TimelineClient(send: { [weak self] message in
+            self?.client?.sendSessionMessage(message) ?? false
+        })
+        timeline.onChange = { [weak self] state in
+            guard let self, self.isQuickAskChatCurrent else { return }
+            self.quickAskPanel.render(state)
+        }
+        timeline.onError = { [weak self] message in
+            guard let self, self.isQuickAskChatCurrent else { return }
+            self.quickAskPanel.showError(message)
+        }
+        return timeline
+    }()
     private var configStore: TrayConfigStore!
     private var config = TrayConfig.defaults
     private var menuController: MenuController!
@@ -74,6 +102,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             botsClient: botsClient
         )
         menuController.delegate = self
+        // MenuController owns the avatar callback; chain the Quick Ask picker after it.
+        let menuImageLoaded = botsClient.onImageLoaded
+        botsClient.onImageLoaded = { [weak self] in
+            menuImageLoaded?()
+            guard let self, self.quickAskPanelCreated else { return }
+            self.quickAskPanel.refreshAvatars()
+        }
 
         configStore.startWatching { [weak self] config, error in
             guard let self else { return }
@@ -220,22 +255,104 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             quickAskPanel.showError(L("Paseo isn't connected; can't open the chat", "Paseo 未连接，无法打开对话"))
             return
         }
+        let session = quickAskPanel.session
         quickAskPanel.setSending(true)
         botsClient.startChat(botId: bot.id, prompt: prompt, newChat: true) { [weak self] result in
             guard let self else { return }
-            self.quickAskPanel.setSending(false)
+            // The panel was closed or reused since this send: still open the chat that was
+            // started, but leave the panel alone.
+            let current = self.quickAskPanel.session == session
+            if current { self.quickAskPanel.setSending(false) }
             switch result {
             case .success(let agentId):
                 guard let url = self.deepLink(agentId: agentId) else {
-                    self.quickAskPanel.showError(L("Paseo isn't connected; can't open the chat", "Paseo 未连接，无法打开对话"))
+                    if current {
+                        self.quickAskPanel.showError(L("Paseo isn't connected; can't open the chat", "Paseo 未连接，无法打开对话"))
+                    }
                     return
                 }
                 self.open(url)
-                self.quickAskPanel.close()
+                if current { self.quickAskPanel.close() }
+            case .failure(let error):
+                if current { self.quickAskPanel.showError(error.message) }
+            }
+        }
+    }
+
+    // MARK: - Quick Ask
+
+    /// Shows the Quick Ask panel. Does nothing when paseo-bots isn't installed (no tray.json).
+    func showQuickAsk() {
+        guard TrayBotsFile.load() != nil else { return }
+        if quickAskPanel.isQuickAskVisible {
+            quickAskPanel.present(mode: .quickAsk)
+            return
+        }
+        quickAskPanel.present(mode: .quickAsk)
+        let session = quickAskPanel.session
+        botsClient.fetchBots { [weak self] result in
+            guard let self, self.quickAskPanel.session == session else { return }
+            switch result {
+            case .loaded(let bots):
+                self.quickAskPanel.setBots(BotRecents.ordered(bots))
+            case .notInstalled:
+                self.quickAskPanel.setBots([])
+                self.quickAskPanel.showError(BotsError.notInstalled.message)
+            case .unreachable:
+                self.quickAskPanel.setBots([])
+                self.quickAskPanel.showError(BotsError.unreachable.message)
+            case .failed(let message):
+                self.quickAskPanel.setBots([])
+                self.quickAskPanel.showError(message)
+            }
+        }
+    }
+
+    /// True when the timeline client is streaming the chat the Quick Ask panel shows.
+    private var isQuickAskChatCurrent: Bool {
+        guard let agentId = quickAskPanel.chatAgentId else { return false }
+        return timelineClient.agentId == agentId
+    }
+
+    /// Always a new chat; the panel streams it and never brings Paseo forward.
+    private func askBot(_ bot: TrayBot, prompt: String) {
+        guard connection.phase == .connected else {
+            quickAskPanel.showError(L("Paseo isn't connected", "Paseo 未连接"))
+            return
+        }
+        BotRecents.markUsed(bot.id)
+        let session = quickAskPanel.session
+        quickAskPanel.setSending(true)
+        botsClient.startChat(botId: bot.id, prompt: prompt, newChat: true) { [weak self] result in
+            // Closed or reset while starting: nobody is waiting for this chat.
+            guard let self, self.quickAskPanel.session == session else { return }
+            self.quickAskPanel.setSending(false)
+            switch result {
+            case .success(let agentId):
+                self.quickAskPanel.chatStarted(agentId: agentId)
+                self.timelineClient.watch(agentId: agentId)
             case .failure(let error):
                 self.quickAskPanel.showError(error.message)
             }
         }
+    }
+
+    private func sendFollowUp(_ text: String) {
+        guard connection.phase == .connected, isQuickAskChatCurrent else {
+            quickAskPanel.showError(L("Paseo isn't connected", "Paseo 未连接"))
+            return
+        }
+        quickAskPanel.clearError()
+        timelineClient.sendFollowUp(text)
+        quickAskPanel.clearFollowUp()
+    }
+
+    private func openQuickAskChat() {
+        guard let agentId = quickAskPanel.chatAgentId, let url = deepLink(agentId: agentId) else {
+            quickAskPanel.showError(L("Paseo isn't connected; can't open the chat", "Paseo 未连接，无法打开对话"))
+            return
+        }
+        open(url)
     }
 
     func menuControllerOpenPaseo() {
