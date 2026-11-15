@@ -71,3 +71,14 @@ unk["payload"]["event"]["item"] = {"type": "future_widget"}
 unk2 = copy.deepcopy(unk)
 unk2["payload"]["seq"] = 1091
 write("unknown-item.jsonl", [snap, unk, unk2])
+
+# notification item (0.15.4 schema: level + message).
+note = copy.deepcopy(by_seq[1090])
+note["payload"]["event"]["item"] = {"type": "notification", "level": "info", "message": "notification#1090"}
+write("notification.jsonl", [snap, note])
+
+# turn_canceled arrives (seq-less) while a refetch is pending; the snapshot says idle.
+idle_snap = snapshot_through(1094, [assistant_merged, tool_running])
+idle_snap["payload"]["agent"]["status"] = "idle"
+write("replay-seqless.jsonl", [snap, by_seq[1090], by_seq[1093],
+                               event_frame("turn_canceled", reason="turn_canceled#x"), idle_snap])

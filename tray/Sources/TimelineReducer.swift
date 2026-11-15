@@ -26,6 +26,8 @@ struct TimelineState: Equatable {
     var unsupportedSeen: Set<String> = []
     /// True while the last assistant row may still receive chunks.
     var assistantOpen = false
+    /// Monotonic counter for ids of rows from seq-less events (unique across snapshot rebuilds).
+    var nextEventId = 0
 }
 
 /// Pure state machine over the daemon's timeline messages. Foundation only.
@@ -47,11 +49,7 @@ enum TimelineReducer {
 
         let agent = payload["agent"] as? [String: Any]
         if let agent {
-            if (agent["status"] as? String) == "running" {
-                s.turn = .running
-            } else if s.turn == .running {
-                s.turn = .idle
-            }
+            s.turn = (agent["status"] as? String) == "running" ? .running : .idle
             s.pendingPermission = !((agent["pendingPermissions"] as? [Any]) ?? []).isEmpty
         }
 
@@ -68,6 +66,9 @@ enum TimelineReducer {
         for data in pending {
             guard let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
             if let frameEpoch = frame["epoch"] as? String, let epoch = s.epoch, frameEpoch != epoch { continue }
+            // Seq-less frames (turn_*, permission_*) can't be ordered against the
+            // snapshot, which already carries the turn and permission state.
+            if frame["seq"] as? Int == nil { continue }
             applyStream(&s, payload: frame)
         }
     }
@@ -108,18 +109,18 @@ enum TimelineReducer {
             let message = event["error"] as? String ?? L("Turn failed", "回合失败")
             s.turn = .failed(message)
             s.assistantOpen = false
-            s.rows.append(.error(id: rowId(seq, s), message: message))
+            s.rows.append(.error(id: rowId(seq, &s), message: message))
         case "turn_canceled":
             s.turn = .canceled
             s.assistantOpen = false
-            s.rows.append(.notice(id: rowId(seq, s), text: L("Stopped", "已停止")))
+            s.rows.append(.notice(id: rowId(seq, &s), text: L("Stopped", "已停止")))
         case "permission_requested":
             s.pendingPermission = true
         case "permission_resolved":
             s.pendingPermission = false
         case "timeline":
             if let item = event["item"] as? [String: Any] {
-                applyStreamItem(&s, item: item, id: rowId(seq, s))
+                applyStreamItem(&s, item: item, id: rowId(seq, &s))
             }
         default:
             break // thread_started, attention_required, …
@@ -136,8 +137,10 @@ enum TimelineReducer {
 
     // MARK: Helpers
 
-    private static func rowId(_ seq: Int?, _ s: TimelineState) -> String {
-        seq.map { "s\($0)" } ?? "e\(s.rows.count)"
+    private static func rowId(_ seq: Int?, _ s: inout TimelineState) -> String {
+        if let seq { return "s\(seq)" }
+        s.nextEventId += 1
+        return "e\(s.nextEventId)"
     }
 
     private static func buffer(_ s: inout TimelineState, _ payload: [String: Any]) {
@@ -184,7 +187,7 @@ enum TimelineReducer {
         case "error":
             rows.append(.error(id: id, message: item["message"] as? String ?? ""))
         case "notification":
-            rows.append(.notice(id: id, text: item["reason"] as? String ?? ""))
+            if let text = item["message"] as? String, !text.isEmpty { rows.append(.notice(id: id, text: text)) }
         case "reasoning", "todo", "compaction":
             break
         case let other:
@@ -217,7 +220,7 @@ enum TimelineReducer {
         case "error":
             s.rows.append(.error(id: id, message: item["message"] as? String ?? ""))
         case "notification":
-            s.rows.append(.notice(id: id, text: item["reason"] as? String ?? ""))
+            if let text = item["message"] as? String, !text.isEmpty { s.rows.append(.notice(id: id, text: text)) }
         case "reasoning", "todo", "compaction":
             break
         case let other:

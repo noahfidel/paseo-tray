@@ -212,7 +212,45 @@ func testSnapshotIgnoresHiddenItems() {
     expect(state.hasSnapshot && state.turn == .running && state.lastSeq == 1089, "testSnapshotIgnoresHiddenItems: snapshot state")
 }
 
+func testNotificationUsesMessage() {
+    let state = replay(loadFixture("notification"))
+    expect(state.rows.last == .notice(id: "s1090", text: "notification#1090"), "testNotificationUsesMessage")
+    var empty = replay(Array(loadFixture("notification").prefix(1)))
+    TimelineReducer.applyStream(&empty, payload: [
+        "seq": 1090, "epoch": empty.epoch as Any,
+        "event": ["type": "timeline", "item": ["type": "notification", "level": "info", "message": ""]],
+    ])
+    expect(empty.rows == snapshotOnly(loadFixture("notification")).rows, "testNotificationUsesMessage: empty message skipped")
+}
+
+func testSeqlessFramesNotReplayedAfterSnapshot() {
+    let frames = loadFixture("replay-seqless")
+    var state = TimelineState()
+    for frame in frames.dropLast(2) { apply(frame, to: &state) }
+    apply(frames[frames.count - 2], to: &state) // turn_canceled while refetch pending
+    expect(state.needsRefetch && state.turn == .running, "testSeqlessFramesNotReplayedAfterSnapshot: held while pending")
+    apply(frames.last!, to: &state)
+    expect(state.rows == snapshotOnly([frames.last!]).rows, "testSeqlessFramesNotReplayedAfterSnapshot: rows from snapshot only")
+    expect(state.turn == .idle, "testSeqlessFramesNotReplayedAfterSnapshot: turn from snapshot")
+}
+
+func testSeqlessRowIdsAreUnique() {
+    var state = replay(loadFixture("canceled"))
+    let first = state.rows.last
+    apply(loadFixture("stream-text-and-tools")[0], to: &state) // snapshot rebuild
+    for frame in loadFixture("canceled").suffix(1) { apply(frame, to: &state) }
+    let ids = state.rows.compactMap { row -> String? in if case .notice(let id, _) = row { return id } else { return nil } }
+    expect(first != nil && Set(ids).count == ids.count && !ids.isEmpty, "testSeqlessRowIdsAreUnique")
+    var again = state
+    for frame in loadFixture("canceled").suffix(1) { apply(frame, to: &again) }
+    let all = again.rows.compactMap { row -> String? in if case .notice(let id, _) = row { return id } else { return nil } }
+    expect(Set(all).count == all.count, "testSeqlessRowIdsAreUnique: after rebuild and repeats")
+}
+
 func runTimelineReducerTests() {
+    testNotificationUsesMessage()
+    testSeqlessFramesNotReplayedAfterSnapshot()
+    testSeqlessRowIdsAreUnique()
     testChunksAppendIntoOneAssistantRow()
     testToolStatusUpdatesInPlace()
     testFailedToolKeepsError()
