@@ -5,6 +5,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
     private let isDemo: Bool
     private let store = AgentStore()
     private let botsClient = BotsClient()
+    private lazy var quickAskPanel: QuickAskPanel = {
+        let panel = QuickAskPanel()
+        panel.avatarProvider = { [weak self] bot in
+            self?.botsClient.avatarImage(for: bot) ?? NSImage()
+        }
+        panel.onSubmit = { [weak self] bot, prompt in
+            self?.submitPrompt(bot: bot, prompt: prompt)
+        }
+        return panel
+    }()
     private var configStore: TrayConfigStore!
     private var config = TrayConfig.defaults
     private var menuController: MenuController!
@@ -189,6 +199,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             case .failure(let error):
                 self.menuController.setBotChatError(error.message)
                 NSSound.beep()
+            }
+        }
+    }
+
+    func menuControllerNewChatWithPrompt(_ bot: TrayBot) {
+        quickAskPanel.present(mode: .prompt(bot: bot))
+    }
+
+    private func submitPrompt(bot: TrayBot, prompt: String) {
+        guard let serverId, !serverId.isEmpty else {
+            quickAskPanel.showError(L("Paseo isn't connected; can't open the chat", "Paseo 未连接，无法打开对话"))
+            return
+        }
+        quickAskPanel.setSending(true)
+        botsClient.startChat(botId: bot.id, prompt: prompt, newChat: true) { [weak self] result in
+            guard let self else { return }
+            self.quickAskPanel.setSending(false)
+            switch result {
+            case .success(let agentId):
+                guard let url = self.deepLink(agentId: agentId) else {
+                    self.quickAskPanel.showError(L("Paseo isn't connected; can't open the chat", "Paseo 未连接，无法打开对话"))
+                    return
+                }
+                self.open(url)
+                self.quickAskPanel.close()
+            case .failure(let error):
+                self.quickAskPanel.showError(error.message)
             }
         }
     }

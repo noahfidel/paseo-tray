@@ -68,10 +68,18 @@ if hasFlag("--bots-list") {
 
 if let index = arguments.firstIndex(of: "--bots-chat") {
     guard index + 1 < arguments.count else {
-        fputs("usage: --bots-chat <botId>\n", stderr)
+        fputs("usage: --bots-chat <botId> [--prompt <text>]\n", stderr)
         exit(2)
     }
-    exit(BotsCLI.chat(botId: arguments[index + 1]))
+    var prompt: String?
+    if let promptIndex = arguments.firstIndex(of: "--prompt") {
+        guard promptIndex + 1 < arguments.count else {
+            fputs("usage: --bots-chat <botId> [--prompt <text>]\n", stderr)
+            exit(2)
+        }
+        prompt = arguments[promptIndex + 1]
+    }
+    exit(BotsCLI.chat(botId: arguments[index + 1], prompt: prompt))
 }
 
 if hasFlag("--self-check") {

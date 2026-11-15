@@ -145,7 +145,14 @@ final class BotsClient {
         }
     }
 
-    func startChat(botId: String, completion: @escaping (Result<String, BotsError>) -> Void) {
+    /// With no prompt and `newChat == false` this sends no body, which reopens the bot's latest chat.
+    /// Otherwise the body holds only `prompt` and `new` (the relay refuses any other key).
+    func startChat(
+        botId: String,
+        prompt: String? = nil,
+        newChat: Bool = false,
+        completion: @escaping (Result<String, BotsError>) -> Void
+    ) {
         guard let file = TrayBotsFile.load() else {
             DispatchQueue.main.async { completion(.failure(.notInstalled)) }
             return
@@ -161,6 +168,17 @@ final class BotsClient {
         request.httpMethod = "POST"
         request.timeoutInterval = 30
         request.setValue("Bearer \(file.token)", forHTTPHeaderField: "Authorization")
+        if prompt != nil || newChat {
+            var body: [String: Any] = [:]
+            if let prompt { body["prompt"] = prompt }
+            if newChat { body["new"] = true }
+            guard let data = try? JSONSerialization.data(withJSONObject: body) else {
+                DispatchQueue.main.async { completion(.failure(.failed("Invalid request"))) }
+                return
+            }
+            request.httpBody = data
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
         perform(request) { outcome in
             switch outcome {
             case .unreachable:
@@ -401,11 +419,11 @@ enum BotsCLI {
         }
     }
 
-    static func chat(botId: String) -> Int32 {
+    static func chat(botId: String, prompt: String? = nil) -> Int32 {
         let client = BotsClient()
         var code: Int32 = 0
         waitForMain { finish in
-            client.startChat(botId: botId) { result in
+            client.startChat(botId: botId, prompt: prompt, newChat: prompt != nil) { result in
                 switch result {
                 case .success(let agentId): print("agentId=\(agentId)")
                 case .failure(let error):

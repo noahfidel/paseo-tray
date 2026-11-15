@@ -4,6 +4,7 @@ import Foundation
 protocol MenuControllerDelegate: AnyObject {
     func menuControllerOpenAgent(_ agentId: String)
     func menuControllerOpenBot(_ botId: String)
+    func menuControllerNewChatWithPrompt(_ bot: TrayBot)
     func menuControllerOpenPaseo()
     func menuControllerToggleLoginItem()
     func menuControllerRevealConfig()
@@ -443,7 +444,21 @@ final class MenuController: NSObject, NSMenuDelegate {
             item.representedObject = bot.id
             item.image = botsClient.avatarImage(for: bot)
             if !bot.title.isEmpty { item.toolTip = bot.title }
+            // Alternates need the primary's modifier mask cleared and identical (empty) key equivalents.
+            item.keyEquivalentModifierMask = []
             target.addItem(item)
+
+            let alternate = NSMenuItem(
+                title: L("New chat with \(bot.name)…", "与 \(bot.name) 新建对话…"),
+                action: #selector(newChatWithPrompt(_:)),
+                keyEquivalent: ""
+            )
+            alternate.target = self
+            alternate.representedObject = bot
+            alternate.image = item.image
+            alternate.isAlternate = true
+            alternate.keyEquivalentModifierMask = [.option]
+            target.addItem(alternate)
         }
     }
 
@@ -557,6 +572,15 @@ final class MenuController: NSObject, NSMenuDelegate {
             return
         }
         delegate?.menuControllerOpenBot(botId)
+    }
+
+    @objc private func newChatWithPrompt(_ sender: NSMenuItem) {
+        guard let bot = sender.representedObject as? TrayBot else { return }
+        if isDemo {
+            NSSound.beep()
+            return
+        }
+        delegate?.menuControllerNewChatWithPrompt(bot)
     }
 
     @objc private func openPaseo() {
