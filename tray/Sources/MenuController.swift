@@ -3,13 +3,14 @@ import Foundation
 
 protocol MenuControllerDelegate: AnyObject {
     func menuControllerOpenAgent(_ agentId: String)
+    func menuControllerOpenBot(_ botId: String)
     func menuControllerOpenPaseo()
     func menuControllerToggleLoginItem()
     func menuControllerRevealConfig()
     func menuControllerQuit()
 }
 
-final class MenuController {
+final class MenuController: NSObject, NSMenuDelegate {
     weak var delegate: MenuControllerDelegate?
 
     private let statusItem: NSStatusItem
@@ -24,23 +25,43 @@ final class MenuController {
     private var flashTimer: Timer?
     private var flashCount = 0
     private var loginItemError: String?
+    private let botsClient: BotsClient
+    private var botsState: BotsState = .loading
+    private var chatError: String?
+    private var chatErrorShownWhileOpen = false
+    private var menuIsOpen = false
+
+    private enum BotsState {
+        case loading
+        case notInstalled
+        case unreachable
+        case failed(String)
+        case loaded([TrayBot])
+    }
 
     init(
         store: AgentStore,
         config: TrayConfig,
         connection: PaseoConnectionStatus,
         serverId: String?,
-        isDemo: Bool
+        isDemo: Bool,
+        botsClient: BotsClient
     ) {
         self.store = store
         self.config = config
         self.connection = connection
         self.serverId = serverId
         self.isDemo = isDemo
+        self.botsClient = botsClient
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.baseImage = Self.loadTrayImage()
+        super.init()
 
         menu.autoenablesItems = false
+        menu.delegate = self
+        botsClient.onImageLoaded = { [weak self] in
+            self?.rebuildMenu()
+        }
         statusItem.menu = menu
         if let button = statusItem.button {
             button.image = baseImage
@@ -51,6 +72,7 @@ final class MenuController {
 
         refresh()
         startRefreshTimer()
+        fetchBots()
 
         if ProcessInfo.processInfo.environment["PASEOTRAY_DEBUG"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
@@ -98,6 +120,44 @@ final class MenuController {
     func setLoginItemError(_ message: String?) {
         loginItemError = message
         refresh()
+    }
+
+    func setBotChatError(_ message: String?) {
+        chatError = message
+        chatErrorShownWhileOpen = false
+        refresh()
+    }
+
+    // MARK: - NSMenuDelegate
+
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu === self.menu else { return }
+        menuIsOpen = true
+        fetchBots()
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        guard menu === self.menu else { return }
+        menuIsOpen = false
+        if chatErrorShownWhileOpen {
+            chatError = nil
+            chatErrorShownWhileOpen = false
+            rebuildMenu()
+        }
+    }
+
+    private func fetchBots() {
+        guard !isDemo else { return }
+        botsClient.fetchBots { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .notInstalled: self.botsState = .notInstalled
+            case .unreachable: self.botsState = .unreachable
+            case .failed(let message): self.botsState = .failed(message)
+            case .loaded(let bots): self.botsState = .loaded(bots)
+            }
+            self.refresh()
+        }
     }
 
     func flash() {
@@ -242,6 +302,10 @@ final class MenuController {
             }
         }
 
+        if !isDemo {
+            addBotsItem()
+        }
+
         menu.addItem(.separator())
         addAction(L("Open Paseo", "打开 Paseo"), action: #selector(openPaseo))
 
@@ -297,7 +361,67 @@ final class MenuController {
         }
     }
 
-    private func addHeader(_ title: String) {
+    private func addBotsItem() {
+        let sub = NSMenu()
+        sub.autoenablesItems = false
+
+        if let chatError {
+            addDisabled("⚠︎ \(chatError)", to: sub)
+            if menuIsOpen { chatErrorShownWhileOpen = true }
+        }
+
+        switch botsState {
+        case .notInstalled, .unreachable:
+            return
+        case .loading:
+            if TrayBotsFile.load() == nil { return }
+            addDisabled(L("Loading…", "加载中…"), to: sub)
+        case .failed(let message):
+            addDisabled("⚠︎ \(message)", to: sub)
+        case .loaded(let bots):
+            if bots.isEmpty {
+                addDisabled(L("No bots", "暂无机器人"), to: sub)
+            } else {
+                var teamOrder: [String] = []
+                var teamNames: [String: String] = [:]
+                var byTeam: [String: [TrayBot]] = [:]
+                var ungrouped: [TrayBot] = []
+                for bot in bots {
+                    if let team = bot.team {
+                        if byTeam[team.id] == nil {
+                            teamOrder.append(team.id)
+                            teamNames[team.id] = team.name
+                        }
+                        byTeam[team.id, default: []].append(bot)
+                    } else {
+                        ungrouped.append(bot)
+                    }
+                }
+                addBots(ungrouped, to: sub)
+                for id in teamOrder {
+                    addHeader(teamNames[id] ?? id, to: sub)
+                    addBots(byTeam[id] ?? [], to: sub)
+                }
+            }
+        }
+
+        let item = NSMenuItem(title: L("Bots", "机器人"), action: nil, keyEquivalent: "")
+        item.submenu = sub
+        menu.addItem(item)
+    }
+
+    private func addBots(_ bots: [TrayBot], to target: NSMenu) {
+        for bot in bots {
+            let item = NSMenuItem(title: bot.name, action: #selector(openBot(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = bot.id
+            item.image = botsClient.avatarImage(for: bot)
+            if !bot.title.isEmpty { item.toolTip = bot.title }
+            target.addItem(item)
+        }
+    }
+
+    private func addHeader(_ title: String, to target: NSMenu? = nil) {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
         item.attributedTitle = NSAttributedString(
@@ -307,13 +431,13 @@ final class MenuController {
                 .foregroundColor: NSColor.secondaryLabelColor,
             ]
         )
-        menu.addItem(item)
+        (target ?? menu).addItem(item)
     }
 
-    private func addDisabled(_ title: String) {
+    private func addDisabled(_ title: String, to target: NSMenu? = nil) {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
-        menu.addItem(item)
+        (target ?? menu).addItem(item)
     }
 
     private func addAction(_ title: String, action: Selector, keyEquivalent: String = "") {
@@ -398,6 +522,15 @@ final class MenuController {
             return
         }
         delegate?.menuControllerOpenAgent(agentId)
+    }
+
+    @objc private func openBot(_ sender: NSMenuItem) {
+        guard let botId = sender.representedObject as? String else { return }
+        if isDemo {
+            NSSound.beep()
+            return
+        }
+        delegate?.menuControllerOpenBot(botId)
     }
 
     @objc private func openPaseo() {

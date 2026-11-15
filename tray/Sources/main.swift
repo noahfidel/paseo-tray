@@ -61,6 +61,19 @@ if hasFlag("--clear-notifications") {
     exit(0)
 }
 
+if hasFlag("--bots-list") {
+    BotsCLI.list()
+    exit(0)
+}
+
+if let index = arguments.firstIndex(of: "--bots-chat") {
+    guard index + 1 < arguments.count else {
+        fputs("usage: --bots-chat <botId>\n", stderr)
+        exit(2)
+    }
+    exit(BotsCLI.chat(botId: arguments[index + 1]))
+}
+
 if hasFlag("--self-check") {
     exit(AgentStore.runSelfCheck() ? 0 : 1)
 }

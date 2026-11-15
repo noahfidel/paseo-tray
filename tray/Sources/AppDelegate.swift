@@ -4,6 +4,7 @@ import Foundation
 final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, MenuControllerDelegate {
     private let isDemo: Bool
     private let store = AgentStore()
+    private let botsClient = BotsClient()
     private var configStore: TrayConfigStore!
     private var config = TrayConfig.defaults
     private var menuController: MenuController!
@@ -55,7 +56,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             config: config,
             connection: connection,
             serverId: serverId,
-            isDemo: isDemo
+            isDemo: isDemo,
+            botsClient: botsClient
         )
         menuController.delegate = self
 
@@ -166,6 +168,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             return
         }
         open(url)
+    }
+
+    func menuControllerOpenBot(_ botId: String) {
+        guard let serverId, !serverId.isEmpty else {
+            menuController.setBotChatError(L("Paseo isn't connected; can't open the chat", "Paseo 未连接，无法打开对话"))
+            NSSound.beep()
+            return
+        }
+        botsClient.startChat(botId: botId) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let agentId):
+                self.menuController.setBotChatError(nil)
+                guard let url = self.deepLink(agentId: agentId) else {
+                    NSSound.beep()
+                    return
+                }
+                self.open(url)
+            case .failure(let error):
+                self.menuController.setBotChatError(error.message)
+                NSSound.beep()
+            }
+        }
     }
 
     func menuControllerOpenPaseo() {
