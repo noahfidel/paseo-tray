@@ -68,7 +68,13 @@ enum TimelineReducer {
             if let frameEpoch = frame["epoch"] as? String, let epoch = s.epoch, frameEpoch != epoch { continue }
             // Seq-less frames (turn_*, permission_*) can't be ordered against the
             // snapshot, which already carries the turn and permission state.
-            if frame["seq"] as? Int == nil { continue }
+            // Exception: a turn-ending frame while the snapshot still says running
+            // would leave the panel stuck on "running", so apply its turn change.
+            if frame["seq"] as? Int == nil {
+                let type = (frame["event"] as? [String: Any])?["type"] as? String
+                guard s.turn == .running,
+                      let type, ["turn_completed", "turn_failed", "turn_canceled"].contains(type) else { continue }
+            }
             applyStream(&s, payload: frame)
         }
     }

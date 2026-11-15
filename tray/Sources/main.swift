@@ -88,7 +88,7 @@ if hasFlag("--quick-ask-status") {
     let setting = QuickAskHotkeySetting.resolve()
     var registered = false
     var hotKey: GlobalHotKey?
-    if let spec = setting.spec {
+    if available, let spec = setting.spec {
         hotKey = GlobalHotKey(spec: spec) {}
         registered = hotKey != nil
     }

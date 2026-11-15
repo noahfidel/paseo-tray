@@ -215,7 +215,27 @@ func testDisconnectedErrorsAndNonStringErrors() {
     expect(errors().last == L("Request failed", "请求失败"), "non-string send error shows generic text")
 }
 
+func testFailedStopSurfacesError() {
+    let (client, sender, errors) = makeClient()
+    client.watch(agentId: "a1")
+    client.stop()
+    let id = sender.messages("cancel_agent_request").last?["requestId"] as Any
+    client.handle(type: "cancel_agent_response", payload: ["agentId": "a1", "requestId": id, "agent": NSNull()])
+    expect(errors().isEmpty, "testFailedStopSurfacesError: ok response is silent")
+    client.handle(type: "rpc_error", payload: ["requestId": "tl-cancel-unknown", "error": "x"])
+    expect(errors().isEmpty, "testFailedStopSurfacesError: unknown rpc_error ignored")
+    client.stop()
+    let id2 = sender.messages("cancel_agent_request").last?["requestId"] as Any
+    client.handle(type: "rpc_error", payload: ["requestId": id2, "error": "cannot cancel"])
+    expect(errors() == ["cannot cancel"], "testFailedStopSurfacesError: rpc_error reported")
+    client.stop()
+    let id3 = sender.messages("cancel_agent_request").last?["requestId"] as Any
+    client.handle(type: "cancel_agent_response", payload: ["agentId": "a1", "requestId": id3, "error": "nope"])
+    expect(errors().last == "nope", "testFailedStopSurfacesError: response error reported")
+}
+
 func runTimelineClientTests() {
+    testFailedStopSurfacesError()
     testLostFollowUpSurfacedOnResubscribe()
     testRefetchResumesAfterGiveUpAndResubscribe()
     testDisconnectedErrorsAndNonStringErrors()

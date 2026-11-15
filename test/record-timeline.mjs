@@ -53,7 +53,7 @@ function scrubItem(item, seq) {
       return { type: t, callId: alias(callIds, "call", item.callId), name: SAFE_TOOLS.has(item.name) ? item.name : "tool",
                status: item.status, error: item.error == null ? null : ph };
     case "error": return { type: t, message: ph };
-    case "notification": return { type: t, reason: ph };
+    case "notification": return { type: t, message: ph };
     default: return { type: t };
   }
 }

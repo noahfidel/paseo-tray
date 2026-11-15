@@ -17,6 +17,7 @@ final class TimelineClient {
 
     private var fetchRequestId: String?
     private var subscribeRequestId: String?
+    private var cancelRequestId: String?
     private var pendingMessageIds = Set<String>()
     private var retryCount = 0
     private var retryPending = false
@@ -43,6 +44,7 @@ final class TimelineClient {
         guard agentId != nil else { return }
         agentId = nil
         fetchRequestId = nil
+        cancelRequestId = nil
         pendingMessageIds = []
         invalidateRetry()
         subscribe([], reportFailure: false)
@@ -84,11 +86,14 @@ final class TimelineClient {
 
     func stop() {
         guard let agentId else { return }
+        let requestId = Self.newId("cancel")
+        cancelRequestId = requestId
         if !send([
             "type": "cancel_agent_request",
             "agentId": agentId,
-            "requestId": Self.newId("cancel"),
+            "requestId": requestId,
         ]) {
+            cancelRequestId = nil
             notConnected()
         }
     }
@@ -129,6 +134,11 @@ final class TimelineClient {
             } else if payload["accepted"] as? Bool == false {
                 onError?(L("Message was not accepted", "消息未被接受"))
             }
+        case "cancel_agent_response":
+            guard matchesAgent(payload),
+                  let requestId = payload["requestId"] as? String, requestId == cancelRequestId else { return }
+            cancelRequestId = nil
+            if let error = Self.errorText(payload) { onError?(error) }
         case "rpc_error":
             guard let requestId = payload["requestId"] as? String, requestId.hasPrefix("tl-") else { return }
             let error = payload["error"] as? String ?? L("Request failed", "请求失败")
@@ -137,6 +147,9 @@ final class TimelineClient {
                 fetchFailed(error)
             } else if requestId == subscribeRequestId {
                 subscribeRequestId = nil
+                onError?(error)
+            } else if requestId == cancelRequestId {
+                cancelRequestId = nil
                 onError?(error)
             } else if pendingMessageIds.remove(requestId) != nil {
                 onError?(error)

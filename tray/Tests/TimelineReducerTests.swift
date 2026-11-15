@@ -247,7 +247,28 @@ func testSeqlessRowIdsAreUnique() {
     expect(Set(all).count == all.count, "testSeqlessRowIdsAreUnique: after rebuild and repeats")
 }
 
+func testSeqlessTurnEndAppliedWhenSnapshotStillRunning() {
+    func runningSnapshot() -> [String: Any] {
+        ["agentId": "a1", "epoch": "e1", "agent": ["status": "running"],
+         "entries": [["item": ["type": "user_message", "text": "hi"], "seqStart": 1, "seqEnd": 1]],
+         "endCursor": ["epoch": "e1", "seq": 1]]
+    }
+    for (type, expected) in [("turn_completed", TurnState.idle), ("turn_canceled", TurnState.canceled)] {
+        var state = TimelineState()
+        // Seq-less turn end arrives while the refetch is in flight (buffered), then a snapshot taken while running.
+        TimelineReducer.applyStream(&state, payload: ["agentId": "a1", "event": ["type": type]])
+        TimelineReducer.applySnapshot(&state, payload: runningSnapshot())
+        expect(state.turn == expected, "testSeqlessTurnEndAppliedWhenSnapshotStillRunning: \(type) ends the turn")
+    }
+    var failed = TimelineState()
+    TimelineReducer.applyStream(&failed, payload: ["agentId": "a1", "event": ["type": "turn_failed", "error": "boom"]])
+    TimelineReducer.applySnapshot(&failed, payload: runningSnapshot())
+    expect(failed.turn == .failed("boom"), "testSeqlessTurnEndAppliedWhenSnapshotStillRunning: turn_failed")
+    expect(failed.rows.count == 2, "testSeqlessTurnEndAppliedWhenSnapshotStillRunning: one error row, no duplicates")
+}
+
 func runTimelineReducerTests() {
+    testSeqlessTurnEndAppliedWhenSnapshotStillRunning()
     testNotificationUsesMessage()
     testSeqlessFramesNotReplayedAfterSnapshot()
     testSeqlessRowIdsAreUnique()

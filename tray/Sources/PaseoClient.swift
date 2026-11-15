@@ -371,6 +371,7 @@ final class PaseoClient {
     private static let timelineMessageTypes: Set<String> = [
         "fetch_agent_timeline_response", "agent_stream", "agent.timeline.replacement",
         "agent.timeline.set_subscription.response", "send_agent_message_response",
+        "cancel_agent_response",
     ]
 
     private func sendSession(_ message: [String: Any]) {

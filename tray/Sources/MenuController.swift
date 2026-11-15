@@ -5,6 +5,7 @@ protocol MenuControllerDelegate: AnyObject {
     func menuControllerOpenAgent(_ agentId: String)
     func menuControllerOpenBot(_ botId: String)
     func menuControllerQuickAsk()
+    func menuControllerWillOpen()
     func menuControllerNewChatWithPrompt(_ bot: TrayBot)
     func menuControllerOpenPaseo()
     func menuControllerToggleLoginItem()
@@ -154,6 +155,7 @@ final class MenuController: NSObject, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         guard menu === self.menu else { return }
         menuIsOpen = true
+        delegate?.menuControllerWillOpen()
         fetchBots()
     }
 

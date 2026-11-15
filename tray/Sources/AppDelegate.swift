@@ -43,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
         }
         timeline.onError = { [weak self] message in
             guard let self, self.isQuickAskChatCurrent else { return }
+            self.quickAskPanel.followUpFailed()
             self.quickAskPanel.showError(message)
         }
         return timeline
@@ -52,6 +53,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
     private var menuController: MenuController!
     private var hotKey: GlobalHotKey?
     private var hotKeyString: String??
+    /// Whether tray.json existed at the last registration check.
+    private var hotKeyAvailable = false
+    private var hotKeyRecheckTimer: Timer?
     private var defaultsObserver: NSObjectProtocol?
     private var client: PaseoClient?
     private var notifier: Notifier!
@@ -141,6 +145,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             queue: .main
         ) { [weak self] _ in
             self?.registerHotKey()
+        }
+        // tray.json can appear or disappear when the paseo-bots plugin is toggled; a 30 s
+        // poll (plus a check on every menu open) is the simplest robust way to follow it.
+        if !isDemo {
+            hotKeyRecheckTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+                self?.registerHotKey()
+            }
         }
 
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -294,12 +305,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
     // MARK: - Quick Ask
 
     /// (Re)registers the global hotkey from the `QuickAskHotkey` default; does nothing when the setting is unchanged.
+    /// Registers only while tray.json exists (paseo-bots installed) and never in demo mode.
     private func registerHotKey() {
+        guard !isDemo else { return }
         let setting = QuickAskHotkeySetting.resolve()
-        if let previous = hotKeyString, previous == setting.string { return }
+        let available = TrayBotsFile.load() != nil
+        if let previous = hotKeyString, previous == setting.string, hotKeyAvailable == available { return }
         hotKeyString = .some(setting.string)
+        hotKeyAvailable = available
         hotKey = nil
-        if let spec = setting.spec {
+        if available, let spec = setting.spec {
             hotKey = GlobalHotKey(spec: spec) { [weak self] in
                 self?.toggleQuickAsk()
             }
@@ -315,6 +330,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
         } else {
             showQuickAsk()
         }
+    }
+
+    func menuControllerWillOpen() {
+        registerHotKey()
     }
 
     func menuControllerQuickAsk() {

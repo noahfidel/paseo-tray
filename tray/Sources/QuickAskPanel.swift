@@ -66,6 +66,8 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     private let stopButton = NSButton(title: "", target: nil, action: nil)
     private(set) var bots: [TrayBot] = []
     private var turnRunning = false
+    /// A follow-up was sent and no render has confirmed the real turn state yet.
+    private var followUpPending = false
     private var preChatConstraints: [NSLayoutConstraint] = []
     private var chatConstraints: [NSLayoutConstraint] = []
     private var bannerShownConstraints: [NSLayoutConstraint] = []
@@ -256,17 +258,31 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         }
         setBannerVisible(state.pendingPermission || hasUnsupported)
         turnRunning = state.turn == .running
+        followUpPending = false
         updateQuickControls()
     }
 
-    /// The follow-up went out; empty the box.
+    /// The follow-up went out; empty the box and treat the turn as running until
+    /// the next render shows the real state (blocks a second send before turn_started).
     func clearFollowUp() {
         inputTextView.string = ""
+        turnRunning = true
+        followUpPending = true
+        updateQuickControls()
+    }
+
+    /// The daemon rejected the follow-up: undo the optimistic running state so the panel isn't stuck.
+    func followUpFailed() {
+        guard followUpPending else { return }
+        followUpPending = false
+        turnRunning = false
+        updateQuickControls()
     }
 
     private func resetQuickAsk() {
         chatAgentId = nil
         turnRunning = false
+        followUpPending = false
         bots = []
         botPopup.removeAllItems()
         botPopup.addItem(withTitle: L("Loading bots…", "正在加载机器人…"))
