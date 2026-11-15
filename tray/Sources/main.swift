@@ -113,6 +113,87 @@ if hasFlag("--login-item-unregister") {
     }
 }
 
+/// `--timeline-watch <agentId> [--seconds N]`: read-only headless transcript stream.
+final class TimelineWatch: PaseoClientDelegate {
+    private let agentId: String
+    private var client: PaseoClient?
+    private var timeline: TimelineClient?
+    private var printed: [String: ChatRow] = [:]
+    private var lastTurn: TurnState?
+    private var connected = false
+    private var watching = false
+    private var lastDetail = ""
+    private var sawError = false
+
+    init(agentId: String) { self.agentId = agentId }
+
+    private func escaped(_ text: String) -> String {
+        String(text.replacingOccurrences(of: "\n", with: "\\n").prefix(80))
+    }
+
+    private func line(_ row: ChatRow) -> (key: String, text: String) {
+        switch row {
+        case .user(let id, let text): return (id, "user: \(escaped(text))")
+        case .assistant(let id, let text): return (id, "assistant: \(escaped(text))")
+        case .tool(let callId, let name, let status, _): return (callId, "tool[\(status)]: \(name)")
+        case .error(let id, let message): return (id, "error: \(escaped(message))")
+        case .notice(let id, let text): return (id, "notice: \(escaped(text))")
+        case .unsupported(let id, let type): return (id, "unsupported: \(type)")
+        }
+    }
+
+    private func render(_ state: TimelineState) {
+        for row in state.rows {
+            let (key, text) = line(row)
+            if printed[key] == row { continue }
+            printed[key] = row
+            print(text)
+        }
+        if lastTurn != state.turn {
+            lastTurn = state.turn
+            print("turn=\(state.turn)")
+        }
+        fflush(stdout)
+    }
+
+    func start(seconds: Double) {
+        let timeline = TimelineClient(send: { [weak self] in self?.client?.sendSessionMessage($0) ?? false })
+        timeline.onChange = { [weak self] in self?.render($0) }
+        timeline.onError = { [weak self] message in
+            self?.sawError = true
+            fputs("error: \(message)\n", stderr)
+        }
+        self.timeline = timeline
+        let client = PaseoClient(delegate: self)
+        self.client = client
+        client.start()
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+            guard let self else { exit(1) }
+            if !self.connected {
+                fputs("not connected: \(self.lastDetail)\n", stderr)
+                exit(1)
+            }
+            exit(self.timeline?.state.hasSnapshot == true ? 0 : 1)
+        }
+    }
+
+    func paseoClient(_ client: PaseoClient, event: PaseoClientEvent) {
+        switch event {
+        case .status(let status):
+            lastDetail = status.detail
+            let nowConnected = status.phase == .connected
+            if nowConnected && !connected {
+                if watching { timeline?.resubscribe() } else { watching = true; timeline?.watch(agentId: agentId) }
+            }
+            connected = nowConnected
+        case .timelineMessage(let type, let payload):
+            timeline?.handle(type: type, payload: payload)
+        default:
+            break
+        }
+    }
+}
+
 let app = NSApplication.shared
 let diagnosticsMode = hasFlag("--selftest") || hasFlag("--watch-json")
 let demoMode = hasFlag("--demo")
@@ -124,6 +205,26 @@ if hasFlag("--test-notification") {
     DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
         exit(0)
     }
+    app.run()
+    exit(0)
+}
+
+if let index = arguments.firstIndex(of: "--timeline-watch") {
+    guard index + 1 < arguments.count else {
+        fputs("usage: --timeline-watch <agentId> [--seconds N]\n", stderr)
+        exit(2)
+    }
+    var seconds = 15.0
+    if let secondsIndex = arguments.firstIndex(of: "--seconds") {
+        guard secondsIndex + 1 < arguments.count, let value = Double(arguments[secondsIndex + 1]), value > 0 else {
+            fputs("usage: --timeline-watch <agentId> [--seconds N]\n", stderr)
+            exit(2)
+        }
+        seconds = value
+    }
+    app.setActivationPolicy(.prohibited)
+    let watch = TimelineWatch(agentId: arguments[index + 1])
+    watch.start(seconds: seconds)
     app.run()
     exit(0)
 }

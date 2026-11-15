@@ -15,6 +15,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
         }
         return panel
     }()
+    /// Streams one agent's timeline over the same daemon connection (the Quick Ask panel drives it).
+    private(set) lazy var timelineClient = TimelineClient(send: { [weak self] message in
+        self?.client?.sendSessionMessage(message) ?? false
+    })
     private var configStore: TrayConfigStore!
     private var config = TrayConfig.defaults
     private var menuController: MenuController!
@@ -124,8 +128,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
     func paseoClient(_ client: PaseoClient, event: PaseoClientEvent) {
         switch event {
         case .status(let status):
+            let reconnected = status.phase == .connected && connection.phase != .connected
             connection = status
             refreshMenu()
+            if reconnected { timelineClient.resubscribe() }
+        case .timelineMessage(let type, let payload):
+            timelineClient.handle(type: type, payload: payload)
         case .snapshot(let entries, let hasMore, let serverId):
             store.replace(entries: entries, hasMore: hasMore)
             self.serverId = serverId

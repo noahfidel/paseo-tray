@@ -35,6 +35,8 @@ enum PaseoClientEvent {
     case snapshot(entries: [[String: Any]], hasMore: Bool, serverId: String)
     case agentUpdate([String: Any])
     case attention([String: Any])
+    /// Timeline traffic for `TimelineClient`: payload of the session message `type`.
+    case timelineMessage(type: String, payload: [String: Any])
 }
 
 protocol PaseoClientDelegate: AnyObject {
@@ -356,6 +358,21 @@ final class PaseoClient {
         sendRaw(hello)
     }
 
+    var isConnected: Bool { status.phase == .connected }
+
+    /// Sends a session message for another component; false when not connected.
+    @discardableResult
+    func sendSessionMessage(_ message: [String: Any]) -> Bool {
+        guard isConnected, task != nil else { return false }
+        sendSession(message)
+        return true
+    }
+
+    private static let timelineMessageTypes: Set<String> = [
+        "fetch_agent_timeline_response", "agent_stream", "agent.timeline.replacement",
+        "agent.timeline.set_subscription.response", "send_agent_message_response",
+    ]
+
     private func sendSession(_ message: [String: Any]) {
         sendRaw(["type": "session", "message": message])
     }
@@ -567,9 +584,16 @@ final class PaseoClient {
             }
             markEventsAck()
         case "rpc_error":
+            if let payload = message["payload"] as? [String: Any],
+               let requestId = payload["requestId"] as? String, requestId.hasPrefix("tl-") {
+                delegate?.paseoClient(self, event: .timelineMessage(type: type, payload: payload))
+                break
+            }
             handleRpcError(message)
         default:
-            break
+            if Self.timelineMessageTypes.contains(type), let payload = message["payload"] as? [String: Any] {
+                delegate?.paseoClient(self, event: .timelineMessage(type: type, payload: payload))
+            }
         }
     }
 

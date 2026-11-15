@@ -83,6 +83,8 @@ final class Diagnostics: NSObject, PaseoClientDelegate {
                     self?.finish(code: 0, reason: "snapshot")
                 }
             }
+        case .timelineMessage:
+            break
         case .agentUpdate(let payload):
             store.apply(update: payload)
             emit(stateEvent("update", extra: ["payloadKind": payload["kind"] as? String ?? "unknown"]))

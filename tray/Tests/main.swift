@@ -21,6 +21,7 @@ guard CommandLine.arguments.count >= 2 else {
 fixturesDirectory = CommandLine.arguments[1]
 
 runTimelineReducerTests()
+runTimelineClientTests()
 
 if failureCount == 0 {
     print("ALL \(testCount) TESTS PASSED")
