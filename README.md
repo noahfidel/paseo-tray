@@ -607,7 +607,7 @@ returning, so it never reports an old success as a new save.
 
 ### Quick Ask hotkey
 
-With the paseo-bots plugin installed, press `⌥⇧Space` (Option-Shift-Space) to
+With the paseo-bots plugin installed, press `⌥Space` (Option-Space) to
 open Quick Ask, or pick "Quick Ask…" in the Bots menu. Change the shortcut with
 a user default (not `config.json`, which the plugin rewrites):
 
@@ -618,6 +618,8 @@ defaults write sh.paseo.tray QuickAskHotkey "cmd+shift+k"
 Use one or more of `cmd`, `ctrl`, `option`, `shift` plus one key (`space`,
 `a`-`z`, `0`-`9`). An empty string (`""`) disables the hotkey. If another app
 already owns the shortcut, the tray logs it and the menu item still works.
+Claude desktop's Quick Entry can also be set to `⌥Space`; if yours is, pick
+another shortcut for one of them.
 
 ### Notifications
 

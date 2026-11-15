@@ -3,7 +3,7 @@ import Foundation
 /// A global shortcut: a Carbon virtual key code plus Carbon modifier flags.
 /// Foundation-only (numeric Carbon constants) so the parser is unit-tested without AppKit.
 struct HotKeySpec: Equatable {
-    static let defaultString = "option+shift+space"
+    static let defaultString = "option+space"
 
     // Carbon modifier flags (cmdKey, shiftKey, optionKey, controlKey).
     static let cmdKey: UInt32 = 256
@@ -30,7 +30,7 @@ struct HotKeySpec: Equatable {
         "shift": shiftKey,
     ]
 
-    /// `"option+shift+space"`, `"Cmd+K"`: modifiers plus exactly one key; needs at least one modifier.
+    /// `"option+space"`, `"Cmd+K"`: modifiers plus exactly one key; needs at least one modifier.
     static func parse(_ string: String) -> HotKeySpec? {
         var modifiers: UInt32 = 0
         var key: UInt32?

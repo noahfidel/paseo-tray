@@ -1,8 +1,9 @@
 import Foundation
 
 func runHotKeySpecTests() {
-    let space = HotKeySpec.parse("option+shift+space")
-    expect(space == HotKeySpec(keyCode: 49, modifiers: 2048 | 512), "testHotKeyDefault")
+    let space = HotKeySpec.parse("option+space")
+    expect(space == HotKeySpec(keyCode: 49, modifiers: 2048), "testHotKeyDefault")
+    expect(HotKeySpec.parse("option+shift+space") == HotKeySpec(keyCode: 49, modifiers: 2048 | 512), "testHotKeyOptionShiftSpace")
     expect(HotKeySpec.parse(HotKeySpec.defaultString) == space, "testHotKeyDefaultStringParses")
     expect(HotKeySpec.parse("Cmd+K") == HotKeySpec(keyCode: 40, modifiers: 256), "testHotKeyCmdK")
     expect(HotKeySpec.parse(" Command + Ctrl + 1 ") == HotKeySpec(keyCode: 18, modifiers: 256 | 4096), "testHotKeyAliasesAndSpaces")
