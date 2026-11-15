@@ -27,11 +27,10 @@ struct TrayBotsFile {
         guard let data = try? Data(contentsOf: fileURL),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               (object["version"] as? Int) == 1,
-              let port = object["port"] as? Int,
+              let port = object["port"] as? Int, (1...65_535).contains(port),
               let token = object["token"] as? String, !token.isEmpty,
-              let urlString = object["url"] as? String,
-              let url = URL(string: urlString),
-              let scheme = url.scheme, scheme == "http" || scheme == "https" else {
+              // Always loopback: ignore the file's `url` so the token never leaves this host.
+              let url = URL(string: "http://127.0.0.1:\(port)") else {
             return nil
         }
         return TrayBotsFile(port: port, token: token, url: url)
