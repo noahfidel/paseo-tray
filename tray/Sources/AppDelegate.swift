@@ -50,6 +50,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
     private var configStore: TrayConfigStore!
     private var config = TrayConfig.defaults
     private var menuController: MenuController!
+    private var hotKey: GlobalHotKey?
+    private var hotKeyString: String??
+    private var defaultsObserver: NSObjectProtocol?
     private var client: PaseoClient?
     private var notifier: Notifier!
     private var connection = PaseoConnectionStatus()
@@ -129,6 +132,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             let client = PaseoClient(delegate: self)
             self.client = client
             client.start()
+        }
+
+        registerHotKey()
+        defaultsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.registerHotKey()
         }
 
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -281,19 +293,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
 
     // MARK: - Quick Ask
 
+    /// (Re)registers the global hotkey from the `QuickAskHotkey` default; does nothing when the setting is unchanged.
+    private func registerHotKey() {
+        let setting = QuickAskHotkeySetting.resolve()
+        if let previous = hotKeyString, previous == setting.string { return }
+        hotKeyString = .some(setting.string)
+        hotKey = nil
+        if let spec = setting.spec {
+            hotKey = GlobalHotKey(spec: spec) { [weak self] in
+                self?.toggleQuickAsk()
+            }
+        }
+        // A failed registration leaves the menu item without a shortcut.
+        menuController.setQuickAskShortcut(hotKey != nil ? setting.spec : nil)
+    }
+
+    /// Hotkey: closes the panel when it is already visible and key; otherwise shows it.
+    private func toggleQuickAsk() {
+        if quickAskPanelCreated, quickAskPanel.isQuickAskVisible, quickAskPanel.isKeyWindow {
+            quickAskPanel.close()
+        } else {
+            showQuickAsk()
+        }
+    }
+
+    func menuControllerQuickAsk() {
+        showQuickAsk()
+    }
+
     /// Shows the Quick Ask panel. Does nothing when paseo-bots isn't installed (no tray.json).
     func showQuickAsk() {
         guard TrayBotsFile.load() != nil else { return }
         if quickAskPanel.isQuickAskVisible {
             quickAskPanel.present(mode: .quickAsk)
+            // An earlier fetch failed: try again instead of leaving an empty picker.
+            if quickAskPanel.bots.isEmpty, quickAskPanel.chatAgentId == nil {
+                loadQuickAskBots()
+            }
             return
         }
         quickAskPanel.present(mode: .quickAsk)
+        loadQuickAskBots()
+    }
+
+    private func loadQuickAskBots() {
         let session = quickAskPanel.session
         botsClient.fetchBots { [weak self] result in
             guard let self, self.quickAskPanel.session == session else { return }
             switch result {
             case .loaded(let bots):
+                self.quickAskPanel.clearError()
                 self.quickAskPanel.setBots(BotRecents.ordered(bots))
             case .notInstalled:
                 self.quickAskPanel.setBots([])
@@ -343,8 +392,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             return
         }
         quickAskPanel.clearError()
-        timelineClient.sendFollowUp(text)
-        quickAskPanel.clearFollowUp()
+        // Keep the typed text when nothing was sent (the socket dropped after the check above).
+        if timelineClient.sendFollowUp(text) {
+            quickAskPanel.clearFollowUp()
+        }
     }
 
     private func openQuickAskChat() {

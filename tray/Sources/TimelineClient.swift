@@ -60,8 +60,10 @@ final class TimelineClient {
         if lost { onError?(L("Your last message may not have been sent", "你的上一条消息可能未发送")) }
     }
 
-    func sendFollowUp(_ text: String) {
-        guard let agentId else { return }
+    /// Returns false when nothing was sent (not watching, or the connection dropped), so the caller keeps the typed text.
+    @discardableResult
+    func sendFollowUp(_ text: String) -> Bool {
+        guard let agentId else { return false }
         gaveUp = false
         retryCount = 0
         let requestId = Self.newId("msg")
@@ -75,7 +77,9 @@ final class TimelineClient {
         ]) {
             pendingMessageIds.remove(requestId)
             notConnected()
+            return false
         }
+        return true
     }
 
     func stop() {

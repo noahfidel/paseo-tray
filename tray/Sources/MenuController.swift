@@ -4,6 +4,7 @@ import Foundation
 protocol MenuControllerDelegate: AnyObject {
     func menuControllerOpenAgent(_ agentId: String)
     func menuControllerOpenBot(_ botId: String)
+    func menuControllerQuickAsk()
     func menuControllerNewChatWithPrompt(_ bot: TrayBot)
     func menuControllerOpenPaseo()
     func menuControllerToggleLoginItem()
@@ -31,6 +32,7 @@ final class MenuController: NSObject, NSMenuDelegate {
     private var chatError: String?
     private var chatErrorShownWhileOpen = false
     private var menuIsOpen = false
+    private var quickAskShortcut: HotKeySpec?
 
     private let botsItem = NSMenuItem(title: L("Bots", "机器人"), action: nil, keyEquivalent: "")
     private let botsSubmenu = NSMenu()
@@ -133,6 +135,12 @@ final class MenuController: NSObject, NSMenuDelegate {
     func setLoginItemError(_ message: String?) {
         loginItemError = message
         refresh()
+    }
+
+    /// The registered global shortcut, shown next to "Quick Ask…" (nil: none registered).
+    func setQuickAskShortcut(_ spec: HotKeySpec?) {
+        quickAskShortcut = spec
+        populateBotsSubmenu()
     }
 
     func setBotChatError(_ message: String?) {
@@ -398,9 +406,26 @@ final class MenuController: NSObject, NSMenuDelegate {
         }
     }
 
+    private func addQuickAskItem(to target: NSMenu) {
+        let item = NSMenuItem(title: L("Quick Ask…", "快速提问…"), action: #selector(quickAsk), keyEquivalent: "")
+        item.target = self
+        if let spec = quickAskShortcut {
+            item.keyEquivalent = spec.keyEquivalent
+            var mask: NSEvent.ModifierFlags = []
+            if spec.modifiers & HotKeySpec.cmdKey != 0 { mask.insert(.command) }
+            if spec.modifiers & HotKeySpec.shiftKey != 0 { mask.insert(.shift) }
+            if spec.modifiers & HotKeySpec.optionKey != 0 { mask.insert(.option) }
+            if spec.modifiers & HotKeySpec.controlKey != 0 { mask.insert(.control) }
+            item.keyEquivalentModifierMask = mask
+        }
+        target.addItem(item)
+        target.addItem(.separator())
+    }
+
     private func populateBotsSubmenu() {
         let sub = botsSubmenu
         sub.removeAllItems()
+        if botsVisible { addQuickAskItem(to: sub) }
 
         switch botsState {
         case .notInstalled, .unreachable:
@@ -581,6 +606,10 @@ final class MenuController: NSObject, NSMenuDelegate {
             return
         }
         delegate?.menuControllerNewChatWithPrompt(bot)
+    }
+
+    @objc private func quickAsk() {
+        delegate?.menuControllerQuickAsk()
     }
 
     @objc private func openPaseo() {

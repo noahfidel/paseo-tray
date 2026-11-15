@@ -16,6 +16,7 @@ swiftc \
   -O \
   -target "${ARCH}-apple-macos13.0" \
   -framework AppKit \
+  -framework Carbon \
   -framework ServiceManagement \
   -framework UserNotifications \
   Sources/*.swift \

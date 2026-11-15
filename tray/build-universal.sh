@@ -16,6 +16,7 @@ for arch in arm64 x86_64; do
     -O \
     -target "${arch}-apple-macos13.0" \
     -framework AppKit \
+    -framework Carbon \
     -framework ServiceManagement \
     -framework UserNotifications \
     Sources/*.swift \

@@ -82,6 +82,21 @@ if let index = arguments.firstIndex(of: "--bots-chat") {
     exit(BotsCLI.chat(botId: arguments[index + 1], prompt: prompt))
 }
 
+if hasFlag("--quick-ask-status") {
+    // Headless: registers the hotkey in-process (Carbon needs no window), reports, then unregisters on exit.
+    let available = TrayBotsFile.load() != nil
+    let setting = QuickAskHotkeySetting.resolve()
+    var registered = false
+    var hotKey: GlobalHotKey?
+    if let spec = setting.spec {
+        hotKey = GlobalHotKey(spec: spec) {}
+        registered = hotKey != nil
+    }
+    print("available=\(available) hotkey=\(setting.string ?? "disabled") registered=\(registered)")
+    hotKey = nil
+    exit(0)
+}
+
 if hasFlag("--self-check") {
     exit(AgentStore.runSelfCheck() ? 0 : 1)
 }

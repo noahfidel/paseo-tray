@@ -1,6 +1,12 @@
 import Foundation
 
 func runChatMarkdownTests() {
+    expect(ChatMarkdown.split("Code:\r\n```swift\r\nlet x = 1\r\n```\r\nDone") == [
+        .text("Code:"),
+        .code(language: "swift", text: "let x = 1"),
+        .text("Done"),
+    ], "testMarkdownCRLFFenceCloses")
+
     expect(ChatMarkdown.split("Hello **there**") == [.text("Hello **there**")], "testMarkdownPlainText")
 
     expect(ChatMarkdown.split("") == [], "testMarkdownEmpty")

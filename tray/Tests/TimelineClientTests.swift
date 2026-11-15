@@ -128,8 +128,14 @@ func testNotConnectedReportsError() {
     client.watch(agentId: "a1")
     expect(errors().contains(L("Paseo isn't connected", "Paseo 未连接")), "watch while disconnected reports error")
     let before = errors().count
-    client.sendFollowUp("x")
+    let sent = client.sendFollowUp("x")
     expect(errors().count == before + 1, "follow-up while disconnected reports error")
+    expect(!sent, "follow-up while disconnected returns false")
+    let idle = TimelineClient(send: { _ in true })
+    expect(!idle.sendFollowUp("x"), "follow-up while not watching returns false")
+    let (live, _, _) = makeClient()
+    live.watch(agentId: "a1")
+    expect(live.sendFollowUp("x"), "follow-up that was sent returns true")
 }
 
 func testFetchErrorRetriesWithDelayNotTightLoop() {

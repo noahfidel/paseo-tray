@@ -64,7 +64,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     private let quickHintLabel = NSTextField(labelWithString: "")
     private let quickSendButton = NSButton(title: "", target: nil, action: nil)
     private let stopButton = NSButton(title: "", target: nil, action: nil)
-    private var bots: [TrayBot] = []
+    private(set) var bots: [TrayBot] = []
     private var turnRunning = false
     private var preChatConstraints: [NSLayoutConstraint] = []
     private var chatConstraints: [NSLayoutConstraint] = []
@@ -230,7 +230,8 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         guard case .quickAsk? = mode else { return }
         chatAgentId = agentId
         inputTextView.string = ""
-        turnRunning = false
+        // The first turn is already running; the first render corrects this.
+        turnRunning = true
         transcript.update(rows: [])
         NSLayoutConstraint.deactivate(preChatConstraints)
         NSLayoutConstraint.activate(chatConstraints)

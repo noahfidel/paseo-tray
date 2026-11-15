@@ -23,7 +23,8 @@ enum ChatMarkdown {
             textLines = []
         }
 
-        for line in markdown.components(separatedBy: "\n") {
+        for rawLine in markdown.components(separatedBy: "\n") {
+            let line = rawLine.hasSuffix("\r") ? String(rawLine.dropLast()) : rawLine
             let marker = fenceMarker(line)
             if let open = fence {
                 if let marker, marker.hasPrefix(open), marker.rest.isEmpty {
@@ -65,7 +66,7 @@ enum ChatMarkdown {
         guard let first = body.first, first == "`" || first == "~" else { return nil }
         let fence = body.prefix { $0 == first }
         guard fence.count >= 3 else { return nil }
-        let rest = body.dropFirst(fence.count).trimmingCharacters(in: .whitespaces)
+        let rest = body.dropFirst(fence.count).trimmingCharacters(in: .whitespacesAndNewlines)
         return Marker(fence: String(fence), rest: rest)
     }
 }

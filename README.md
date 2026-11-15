@@ -605,6 +605,20 @@ save to show the last write result: 「已同步」 (Synced) or 「写入失败�
 failed: …). That RPC waits for the current write queue to drain before
 returning, so it never reports an old success as a new save.
 
+### Quick Ask hotkey
+
+With the paseo-bots plugin installed, press `⌥⇧Space` (Option-Shift-Space) to
+open Quick Ask, or pick "Quick Ask…" in the Bots menu. Change the shortcut with
+a user default (not `config.json`, which the plugin rewrites):
+
+```bash
+defaults write sh.paseo.tray QuickAskHotkey "cmd+shift+k"
+```
+
+Use one or more of `cmd`, `ctrl`, `option`, `shift` plus one key (`space`,
+`a`-`z`, `0`-`9`). An empty string (`""`) disables the hotkey. If another app
+already owns the shortcut, the tray logs it and the menu item still works.
+
 ### Notifications
 
 - All off by default, to avoid duplicating Paseo's own notifications.
