@@ -31,7 +31,11 @@ final class MenuController: NSObject, NSMenuDelegate {
     private var chatErrorShownWhileOpen = false
     private var menuIsOpen = false
 
-    private enum BotsState {
+    private let botsItem = NSMenuItem(title: L("Bots", "机器人"), action: nil, keyEquivalent: "")
+    private let botsSubmenu = NSMenu()
+    private var botsSubmenuStale = false
+
+    private enum BotsState: Equatable {
         case loading
         case notInstalled
         case unreachable
@@ -59,8 +63,16 @@ final class MenuController: NSObject, NSMenuDelegate {
 
         menu.autoenablesItems = false
         menu.delegate = self
+        botsSubmenu.autoenablesItems = false
+        botsItem.submenu = botsSubmenu
+        populateBotsSubmenu()
         botsClient.onImageLoaded = { [weak self] in
-            self?.rebuildMenu()
+            guard let self else { return }
+            if self.menuIsOpen {
+                self.botsSubmenuStale = true
+            } else {
+                self.populateBotsSubmenu()
+            }
         }
         statusItem.menu = menu
         if let button = statusItem.button {
@@ -139,6 +151,10 @@ final class MenuController: NSObject, NSMenuDelegate {
     func menuDidClose(_ menu: NSMenu) {
         guard menu === self.menu else { return }
         menuIsOpen = false
+        if botsSubmenuStale {
+            botsSubmenuStale = false
+            populateBotsSubmenu()
+        }
         if chatErrorShownWhileOpen {
             chatError = nil
             chatErrorShownWhileOpen = false
@@ -150,13 +166,21 @@ final class MenuController: NSObject, NSMenuDelegate {
         guard !isDemo else { return }
         botsClient.fetchBots { [weak self] result in
             guard let self else { return }
+            let newState: BotsState
             switch result {
-            case .notInstalled: self.botsState = .notInstalled
-            case .unreachable: self.botsState = .unreachable
-            case .failed(let message): self.botsState = .failed(message)
-            case .loaded(let bots): self.botsState = .loaded(bots)
+            case .notInstalled: newState = .notInstalled
+            case .unreachable: newState = .unreachable
+            case .failed(let message): newState = .failed(message)
+            case .loaded(let bots): newState = .loaded(bots)
             }
-            self.refresh()
+            if newState == self.botsState { return }
+            let wasVisible = self.botsVisible
+            self.botsState = newState
+            if self.botsVisible == wasVisible && self.botsItem.menu != nil {
+                self.populateBotsSubmenu()
+            } else {
+                self.refresh()
+            }
         }
     }
 
@@ -302,8 +326,13 @@ final class MenuController: NSObject, NSMenuDelegate {
             }
         }
 
-        if !isDemo {
-            addBotsItem()
+        if let chatError {
+            addDisabled(L("⚠︎ Bot chat: \(chatError)", "⚠︎ 机器人对话：\(chatError)"))
+            if menuIsOpen { chatErrorShownWhileOpen = true }
+        }
+        if !isDemo && botsVisible {
+            botsItem.menu?.removeItem(botsItem)
+            menu.addItem(botsItem)
         }
 
         menu.addItem(.separator())
@@ -361,20 +390,22 @@ final class MenuController: NSObject, NSMenuDelegate {
         }
     }
 
-    private func addBotsItem() {
-        let sub = NSMenu()
-        sub.autoenablesItems = false
-
-        if let chatError {
-            addDisabled("⚠︎ \(chatError)", to: sub)
-            if menuIsOpen { chatErrorShownWhileOpen = true }
+    private var botsVisible: Bool {
+        switch botsState {
+        case .notInstalled, .unreachable: return false
+        case .loading: return TrayBotsFile.load() != nil
+        case .failed, .loaded: return true
         }
+    }
+
+    private func populateBotsSubmenu() {
+        let sub = botsSubmenu
+        sub.removeAllItems()
 
         switch botsState {
         case .notInstalled, .unreachable:
-            return
+            break
         case .loading:
-            if TrayBotsFile.load() == nil { return }
             addDisabled(L("Loading…", "加载中…"), to: sub)
         case .failed(let message):
             addDisabled("⚠︎ \(message)", to: sub)
@@ -404,10 +435,6 @@ final class MenuController: NSObject, NSMenuDelegate {
                 }
             }
         }
-
-        let item = NSMenuItem(title: L("Bots", "机器人"), action: nil, keyEquivalent: "")
-        item.submenu = sub
-        menu.addItem(item)
     }
 
     private func addBots(_ bots: [TrayBot], to target: NSMenu) {

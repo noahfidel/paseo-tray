@@ -21,13 +21,18 @@ struct TrayBotsFile {
             .appendingPathComponent("plugin-data/paseo-bots/tray.json")
     }
 
+    private static func isBoolean(_ number: NSNumber) -> Bool {
+        CFGetTypeID(number) == CFBooleanGetTypeID()
+    }
+
     /// Reads the file fresh each call (port and token change on plugin restart).
     /// Returns nil when the file is absent, unparsable or not version 1.
     static func load() -> TrayBotsFile? {
         guard let data = try? Data(contentsOf: fileURL),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              (object["version"] as? Int) == 1,
-              let port = object["port"] as? Int, (1...65_535).contains(port),
+              let version = object["version"] as? NSNumber, !isBoolean(version), version.intValue == 1,
+              let portNumber = object["port"] as? NSNumber, !isBoolean(portNumber),
+              case let port = portNumber.intValue, (1...65_535).contains(port),
               let token = object["token"] as? String, !token.isEmpty,
               // Always loopback: ignore the file's `url` so the token never leaves this host.
               let url = URL(string: "http://127.0.0.1:\(port)") else {
@@ -37,13 +42,13 @@ struct TrayBotsFile {
     }
 }
 
-struct TrayBot: Decodable {
-    struct Team: Decodable {
+struct TrayBot: Decodable, Equatable {
+    struct Team: Decodable, Equatable {
         let id: String
         let name: String
     }
 
-    struct Avatar: Decodable {
+    struct Avatar: Decodable, Equatable {
         let background: String
         let body: String
         let shape: String
@@ -93,6 +98,8 @@ final class BotsClient {
     private var avatarCache: [String: NSImage] = [:]
     private var remoteImages: [String: NSImage] = [:]
     private var remoteInFlight: Set<String> = []
+    private var failedRemote: [String: Date] = [:]
+    private static let remoteRetryInterval: TimeInterval = 10 * 60
     private static let avatarSize = NSSize(width: 18, height: 18)
 
     init() {
@@ -122,9 +129,15 @@ final class BotsClient {
             case .failed(let message):
                 completion(.failed(message))
             case .success(let data):
-                struct Payload: Decodable { let bots: [TrayBot] }
+                // Decode each bot on its own so one malformed entry doesn't hide the rest.
+                struct Lossy: Decodable {
+                    let bot: TrayBot?
+                    init(from decoder: Decoder) throws { bot = try? TrayBot(from: decoder) }
+                }
+                struct Payload: Decodable { let bots: [Lossy] }
                 do {
-                    completion(.loaded(try JSONDecoder().decode(Payload.self, from: data).bots))
+                    let bots = try JSONDecoder().decode(Payload.self, from: data).bots.compactMap { $0.bot }
+                    completion(.loaded(bots))
                 } catch {
                     completion(.failed(L("Unexpected response from paseo-bots", "paseo-bots 返回了无法识别的数据")))
                 }
@@ -243,8 +256,8 @@ final class BotsClient {
                 avatarCache[key] = result
                 return result
             } else if urlString.hasPrefix("http://") || urlString.hasPrefix("https://") {
+                // Placeholder until the download lands (not cached, so a later success still shows).
                 loadRemote(urlString)
-                // Placeholder until the download lands (not cached).
                 return Self.drawn(avatar)
             }
         }
@@ -263,18 +276,29 @@ final class BotsClient {
     }
 
     private func loadRemote(_ urlString: String) {
-        guard !remoteInFlight.contains(urlString), let url = URL(string: urlString) else { return }
+        guard !remoteInFlight.contains(urlString) else { return }
+        if let failedAt = failedRemote[urlString] {
+            if Date().timeIntervalSince(failedAt) < Self.remoteRetryInterval { return }
+            failedRemote[urlString] = nil
+        }
+        guard let url = URL(string: urlString) else {
+            failedRemote[urlString] = Date()
+            return
+        }
         remoteInFlight.insert(urlString)
         var request = URLRequest(url: url)
         request.timeoutInterval = 10
-        session.dataTask(with: request) { [weak self] data, _, _ in
-            let image = data.flatMap { NSImage(data: $0) }
+        session.dataTask(with: request) { [weak self] data, response, _ in
+            let statusOK = (response as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? false
+            let image = statusOK ? data.flatMap { NSImage(data: $0) } : nil
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.remoteInFlight.remove(urlString)
                 if let image, image.isValid {
                     self.remoteImages[urlString] = image
                     self.onImageLoaded?()
+                } else {
+                    self.failedRemote[urlString] = Date()
                 }
             }
         }.resume()
