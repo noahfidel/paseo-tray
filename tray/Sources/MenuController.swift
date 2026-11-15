@@ -176,9 +176,8 @@ final class MenuController: NSObject, NSMenuDelegate {
             if newState == self.botsState { return }
             let wasVisible = self.botsVisible
             self.botsState = newState
-            if self.botsVisible == wasVisible && self.botsItem.menu != nil {
-                self.populateBotsSubmenu()
-            } else {
+            self.populateBotsSubmenu()
+            if self.botsVisible != wasVisible || self.botsItem.menu == nil {
                 self.refresh()
             }
         }
