@@ -21,6 +21,7 @@ final class TimelineClient {
     private var retryCount = 0
     private var retryPending = false
     private var gaveUp = false
+    private var reportedDisconnect = false
     /// Invalidates scheduled retries when the watch changes.
     private var retryToken = 0
 
@@ -33,6 +34,7 @@ final class TimelineClient {
     func watch(agentId: String) {
         self.agentId = agentId
         state = TimelineState()
+        pendingMessageIds = []
         beginWatch()
         onChange?(state)
     }
@@ -43,7 +45,7 @@ final class TimelineClient {
         fetchRequestId = nil
         pendingMessageIds = []
         invalidateRetry()
-        subscribe([])
+        subscribe([], reportFailure: false)
     }
 
     /// After a reconnect: subscriptions are per-socket, so refetch and subscribe again.
@@ -51,11 +53,17 @@ final class TimelineClient {
         guard agentId != nil else { return }
         // Frames arriving before the new snapshot must buffer, not apply.
         state.needsRefetch = true
+        let lost = !pendingMessageIds.isEmpty
+        pendingMessageIds = []
         beginWatch()
+        // A follow-up whose response never arrived may or may not have reached the agent; don't resend.
+        if lost { onError?(L("Your last message may not have been sent", "你的上一条消息可能未发送")) }
     }
 
     func sendFollowUp(_ text: String) {
         guard let agentId else { return }
+        gaveUp = false
+        retryCount = 0
         let requestId = Self.newId("msg")
         pendingMessageIds.insert(requestId)
         if !send([
@@ -89,7 +97,7 @@ final class TimelineClient {
             guard matchesAgent(payload),
                   let requestId = payload["requestId"] as? String, requestId == fetchRequestId else { return }
             fetchRequestId = nil
-            if let error = payload["error"] as? String, !error.isEmpty {
+            if let error = Self.errorText(payload) {
                 fetchFailed(error)
                 return
             }
@@ -107,13 +115,15 @@ final class TimelineClient {
         case "agent.timeline.set_subscription.response":
             guard let requestId = payload["requestId"] as? String, requestId == subscribeRequestId else { return }
             subscribeRequestId = nil
-            if let error = payload["error"] as? String, !error.isEmpty { onError?(error) }
+            if let error = Self.errorText(payload) { onError?(error) }
         case "send_agent_message_response":
             guard matchesAgent(payload),
                   let requestId = payload["requestId"] as? String,
                   pendingMessageIds.remove(requestId) != nil else { return }
-            if payload["accepted"] as? Bool == false {
-                onError?(payload["error"] as? String ?? L("Message was not accepted", "消息未被接受"))
+            if let error = Self.errorText(payload) {
+                onError?(error)
+            } else if payload["accepted"] as? Bool == false {
+                onError?(L("Message was not accepted", "消息未被接受"))
             }
         case "rpc_error":
             guard let requestId = payload["requestId"] as? String, requestId.hasPrefix("tl-") else { return }
@@ -138,6 +148,13 @@ final class TimelineClient {
         "tl-\(kind)-\(UUID().uuidString.lowercased())"
     }
 
+    /// Any non-null `error` is a failure; show it when it is a string.
+    private static func errorText(_ payload: [String: Any]) -> String? {
+        guard let value = payload["error"], !(value is NSNull) else { return nil }
+        if let text = value as? String { return text.isEmpty ? nil : text }
+        return L("Request failed", "请求失败")
+    }
+
     private func matchesAgent(_ payload: [String: Any]) -> Bool {
         guard let agentId, payload["agentId"] as? String == agentId else { return false }
         return true
@@ -154,13 +171,20 @@ final class TimelineClient {
         gaveUp = false
     }
 
+    private func notConnectedOnce() {
+        guard !reportedDisconnect else { return }
+        reportedDisconnect = true
+        notConnected()
+    }
+
     private func beginWatch() {
+        reportedDisconnect = false
         invalidateRetry()
         fetchTail()
         if let agentId { subscribe([agentId]) }
     }
 
-    private func subscribe(_ agentIds: [String]) {
+    private func subscribe(_ agentIds: [String], reportFailure: Bool = true) {
         let requestId = Self.newId("sub")
         subscribeRequestId = requestId
         if !send([
@@ -169,7 +193,7 @@ final class TimelineClient {
             "requestId": requestId,
         ]) {
             subscribeRequestId = nil
-            notConnected()
+            if reportFailure { notConnectedOnce() }
         }
     }
 
@@ -187,7 +211,7 @@ final class TimelineClient {
             "projection": "projected",
         ]) {
             fetchRequestId = nil
-            notConnected()
+            notConnectedOnce()
         }
     }
 

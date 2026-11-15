@@ -156,7 +156,63 @@ func testStopWatchingUnsubscribes() {
     expect(client.state.buffered.isEmpty, "payloads after stopWatching ignored")
 }
 
+func testLostFollowUpSurfacedOnResubscribe() {
+    let (client, sender, errors) = makeClient()
+    client.watch(agentId: "a1")
+    client.sendFollowUp("hello")
+    client.resubscribe()
+    expect(errors() == [L("Your last message may not have been sent", "你的上一条消息可能未发送")], "lost follow-up reported once")
+    expect(sender.messages("send_agent_message_request").count == 1, "no automatic resend")
+    client.resubscribe()
+    expect(errors().count == 1, "pending ids drained")
+    client.sendFollowUp("again")
+    client.watch(agentId: "a1")
+    let id = sender.messages("send_agent_message_request").last?["requestId"] as Any
+    client.handle(type: "send_agent_message_response", payload: ["agentId": "a1", "requestId": id, "accepted": false, "error": "x"])
+    expect(errors().count == 1, "watch clears pending follow-ups")
+}
+
+func testRefetchResumesAfterGiveUpAndResubscribe() {
+    let (client, sender, errors) = makeClient()
+    client.watch(agentId: "a1")
+    client.handle(type: "fetch_agent_timeline_response", payload: snapshotPayload(sender.fetches[0]))
+    client.handle(type: "agent_stream", payload: streamPayload(agentId: "a1", seq: 9, text: "x"))
+    for _ in 0..<3 {
+        client.handle(type: "rpc_error", payload: ["requestId": sender.fetches.last?["requestId"] as Any, "error": "boom"])
+        RunLoop.main.run(until: Date().addingTimeInterval(5.3))
+    }
+    expect(errors() == ["boom"], "gave up after retries")
+    let count = sender.fetches.count
+    client.handle(type: "agent_stream", payload: streamPayload(agentId: "a1", seq: 12, text: "y"))
+    expect(sender.fetches.count == count, "no refetch after give-up")
+    client.resubscribe()
+    expect(sender.fetches.count == count + 1, "resubscribe fetches again after give-up")
+    client.handle(type: "fetch_agent_timeline_response", payload: snapshotPayload(sender.fetches.last!, seq: 12))
+    client.handle(type: "agent_stream", payload: streamPayload(agentId: "a1", seq: 20, text: "z"))
+    expect(sender.fetches.count == count + 2, "gap refetches again")
+}
+
+func testDisconnectedErrorsAndNonStringErrors() {
+    let (client, sender, errors) = makeClient()
+    sender.connected = false
+    client.watch(agentId: "a1")
+    expect(errors().count == 1, "not connected reported once per watch")
+    client.stopWatching()
+    expect(errors().count == 1, "stopWatching while disconnected is silent")
+    sender.connected = true
+    client.watch(agentId: "a1")
+    client.handle(type: "fetch_agent_timeline_response", payload: snapshotPayload(sender.fetches.last!, error: nil).merging(["error": ["code": 1]]) { $1 })
+    expect(sender.fetches.count == 1 && !client.state.hasSnapshot, "non-string error is a failure")
+    client.sendFollowUp("hi")
+    let id = sender.messages("send_agent_message_request").last?["requestId"] as Any
+    client.handle(type: "send_agent_message_response", payload: ["agentId": "a1", "requestId": id, "accepted": true, "error": ["code": 2]])
+    expect(errors().last == L("Request failed", "请求失败"), "non-string send error shows generic text")
+}
+
 func runTimelineClientTests() {
+    testLostFollowUpSurfacedOnResubscribe()
+    testRefetchResumesAfterGiveUpAndResubscribe()
+    testDisconnectedErrorsAndNonStringErrors()
     testWatchSendsTailFetchAndSubscription()
     testStaleAndForeignResponsesIgnored()
     testGapIssuesOneRefetchAtATime()

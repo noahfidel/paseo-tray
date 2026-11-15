@@ -123,7 +123,6 @@ final class TimelineWatch: PaseoClientDelegate {
     private var connected = false
     private var watching = false
     private var lastDetail = ""
-    private var sawError = false
 
     init(agentId: String) { self.agentId = agentId }
 
@@ -159,8 +158,7 @@ final class TimelineWatch: PaseoClientDelegate {
     func start(seconds: Double) {
         let timeline = TimelineClient(send: { [weak self] in self?.client?.sendSessionMessage($0) ?? false })
         timeline.onChange = { [weak self] in self?.render($0) }
-        timeline.onError = { [weak self] message in
-            self?.sawError = true
+        timeline.onError = { message in
             fputs("error: \(message)\n", stderr)
         }
         self.timeline = timeline
