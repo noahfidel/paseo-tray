@@ -34,6 +34,7 @@ final class MenuController: NSObject, NSMenuDelegate {
     private var chatErrorShownWhileOpen = false
     private var menuIsOpen = false
     private var quickAskShortcut: HotKeySpec?
+    private var dispatchers: [TrayDispatcher] = []
 
     private let botsItem = NSMenuItem(title: L("Bots", "机器人"), action: nil, keyEquivalent: "")
     private let botsSubmenu = NSMenu()
@@ -120,11 +121,13 @@ final class MenuController: NSObject, NSMenuDelegate {
         store: AgentStore,
         config: TrayConfig,
         connection: PaseoConnectionStatus,
-        serverId: String?
+        serverId: String?,
+        dispatchers: [TrayDispatcher] = []
     ) {
         self.config = config
         self.connection = connection
         self.serverId = serverId
+        self.dispatchers = dispatchers
         _ = store
         refresh()
     }
@@ -344,6 +347,9 @@ final class MenuController: NSObject, NSMenuDelegate {
             botsItem.menu?.removeItem(botsItem)
             menu.addItem(botsItem)
         }
+        if !isDemo && connection.phase == .connected && !dispatchers.isEmpty {
+            addDispatchersItem()
+        }
 
         menu.addItem(.separator())
         addAction(L("Open Paseo", "打开 Paseo"), action: #selector(openPaseo))
@@ -406,6 +412,26 @@ final class MenuController: NSObject, NSMenuDelegate {
         case .loading: return TrayBotsFile.load() != nil
         case .failed, .loaded: return true
         }
+    }
+
+    /// Rebuilt with the menu, which already refreshes while open, so the marker never goes stale.
+    private func addDispatchersItem() {
+        let parent = NSMenuItem(
+            title: TrayDispatcher.parentMenuTitle(L("Dispatchers", "调度器"), for: dispatchers),
+            action: nil,
+            keyEquivalent: ""
+        )
+        let sub = NSMenu()
+        sub.autoenablesItems = false
+        for dispatcher in dispatchers {
+            let item = NSMenuItem(title: dispatcher.menuTitle, action: #selector(openAgent(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = dispatcher.agentId
+            if !dispatcher.status.isEmpty { item.toolTip = dispatcher.status }
+            sub.addItem(item)
+        }
+        parent.submenu = sub
+        menu.addItem(parent)
     }
 
     private func addQuickAskItem(to target: NSMenu) {

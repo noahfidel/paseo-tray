@@ -129,7 +129,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
                 store: self.store,
                 config: config,
                 connection: self.connection,
-                serverId: self.serverId
+                serverId: self.serverId,
+                dispatchers: self.dispatcherStore.dispatchers()
             )
             if let error {
                 trayLog(error)
@@ -243,7 +244,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             store: store,
             config: config,
             connection: connection,
-            serverId: serverId
+            serverId: serverId,
+            dispatchers: dispatcherStore.dispatchers()
         )
     }
 

@@ -42,6 +42,16 @@ struct TrayDispatcher: Equatable {
     let name: String
     let needsYou: Bool
     let status: String
+
+    /// Menu title; a needs-you dispatcher gets a leading dot and a suffix.
+    var menuTitle: String {
+        needsYou ? L("● \(name) — needs you", "● \(name) — 需要你处理") : name
+    }
+
+    /// Parent menu item title: leading dot when any dispatcher needs the user.
+    static func parentMenuTitle(_ title: String, for list: [TrayDispatcher]) -> String {
+        list.contains(where: \.needsYou) ? "● " + title : title
+    }
 }
 
 /// Raw agent dictionaries of the dispatcher subscription, keyed by id.

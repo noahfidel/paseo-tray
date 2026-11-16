@@ -144,4 +144,12 @@ func runDispatcherStoreTests() {
     s.replace(entries: [["agent": agent("a")]])
     s.replace(entries: [])
     expect(s.dispatchers().isEmpty, "store: replace with no entries empties it")
+
+    // Menu titles.
+    let quiet = TrayDispatcher(agentId: "a", groupId: "g", name: "Alpha", needsYou: false, status: "idle")
+    let waiting = TrayDispatcher(agentId: "b", groupId: "h", name: "Beta", needsYou: true, status: "idle")
+    expect(quiet.menuTitle == "Alpha", "menu: quiet dispatcher shows its name")
+    expect(waiting.menuTitle == L("● Beta — needs you", "● Beta — 需要你处理"), "menu: needs-you marker and suffix")
+    expect(TrayDispatcher.parentMenuTitle("D", for: [quiet]) == "D", "menu: parent unmarked when none need you")
+    expect(TrayDispatcher.parentMenuTitle("D", for: [quiet, waiting]) == "● D", "menu: parent marked when any needs you")
 }
