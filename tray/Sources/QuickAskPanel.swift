@@ -5,6 +5,12 @@ import Foundation
 /// Prompt mode: type a first message, send it, and the caller opens the new chat in Paseo.
 /// Quick Ask mode: pick a bot, ask, and the reply streams into the panel; follow-ups continue
 /// that chat. The panel never opens Paseo itself; only "Open in Paseo" asks the caller to.
+/// Something Quick Ask can message: a paseo-bots bot (new chat) or a Flowly dispatcher (its existing chat).
+enum QuickAskTarget: Equatable {
+    case bot(TrayBot)
+    case dispatcher(TrayDispatcher)
+}
+
 final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     enum Mode {
         case prompt(bot: TrayBot)
@@ -15,8 +21,8 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
 
     /// Prompt mode: called with the bot and the validated (trimmed, 1...20,000 UTF-16 units) prompt.
     var onSubmit: ((TrayBot, String) -> Void)?
-    /// Quick Ask: first question to the picked bot (validated like `onSubmit`).
-    var onAsk: ((TrayBot, String) -> Void)?
+    /// Quick Ask: first question to the picked bot or dispatcher (validated like `onSubmit`).
+    var onAsk: ((QuickAskTarget, String) -> Void)?
     /// Quick Ask: a follow-up in the chat that `chatStarted` began. Call `clearFollowUp` once sent.
     var onFollowUp: ((String) -> Void)?
     var onStop: (() -> Void)?
@@ -65,6 +71,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     private let quickSendButton = NSButton(title: "", target: nil, action: nil)
     private let stopButton = NSButton(title: "", target: nil, action: nil)
     private(set) var bots: [TrayBot] = []
+    private(set) var dispatchers: [TrayDispatcher] = []
     private var turnRunning = false
     /// A follow-up was sent and no render has confirmed the real turn state yet.
     private var followUpPending = false
@@ -198,22 +205,51 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
 
     // MARK: - Quick Ask
 
-    /// Fills the bot picker (already in the order to show). An empty list leaves Ask disabled.
+    /// Fills the bot part of the picker (already in the order to show).
     func setBots(_ bots: [TrayBot]) {
         self.bots = bots
+        rebuildPicker()
+    }
+
+    /// Fills the dispatcher part of the picker (store order).
+    func setDispatchers(_ dispatchers: [TrayDispatcher]) {
+        self.dispatchers = dispatchers
+        rebuildPicker()
+    }
+
+    private func rebuildPicker() {
+        let previous = botPopup.selectedItem?.representedObject as? String
         botPopup.removeAllItems()
-        if bots.isEmpty {
+        let entries = QuickAskTargets.items(
+            bots: bots.map { (id: $0.id, title: $0.name) },
+            dispatchers: dispatchers.map { (id: $0.agentId, title: $0.menuTitle) })
+        if entries.isEmpty {
             botPopup.addItem(withTitle: L("No bots", "没有机器人"))
             botPopup.lastItem?.isEnabled = false
         } else {
-            for bot in bots {
-                let item = NSMenuItem(title: bot.name, action: nil, keyEquivalent: "")
-                item.representedObject = bot.id
-                item.image = avatarProvider?(bot)
-                if !bot.title.isEmpty { item.toolTip = bot.title }
-                botPopup.menu?.addItem(item)
+            for entry in entries {
+                switch entry {
+                case .separator:
+                    botPopup.menu?.addItem(.separator())
+                case .header(let title):
+                    let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                    item.isEnabled = false
+                    botPopup.menu?.addItem(item)
+                case .item(let id, let title):
+                    let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                    item.representedObject = id
+                    if let bot = bots.first(where: { QuickAskTargets.botId($0.id) == id }) {
+                        item.image = avatarProvider?(bot)
+                        if !bot.title.isEmpty { item.toolTip = bot.title }
+                    }
+                    botPopup.menu?.addItem(item)
+                }
             }
-            botPopup.selectItem(at: 0)
+            if let previous, let index = botPopup.itemArray.firstIndex(where: { ($0.representedObject as? String) == previous }) {
+                botPopup.selectItem(at: index)
+            } else if let first = botPopup.itemArray.firstIndex(where: { $0.representedObject != nil }) {
+                botPopup.selectItem(at: first)
+            }
         }
         updateQuickControls()
     }
@@ -222,7 +258,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     func refreshAvatars() {
         if let currentBot, case .prompt? = mode { avatarView.image = avatarProvider?(currentBot) }
         for item in botPopup.itemArray {
-            guard let id = item.representedObject as? String, let bot = bots.first(where: { $0.id == id }) else { continue }
+            guard let id = item.representedObject as? String, let bot = bots.first(where: { QuickAskTargets.botId($0.id) == id }) else { continue }
             item.image = avatarProvider?(bot)
         }
     }
@@ -284,6 +320,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         turnRunning = false
         followUpPending = false
         bots = []
+        dispatchers = []
         botPopup.removeAllItems()
         botPopup.addItem(withTitle: L("Loading bots…", "正在加载机器人…"))
         botPopup.lastItem?.isEnabled = false
@@ -304,9 +341,13 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         updateQuickControls()
     }
 
-    private var selectedBot: TrayBot? {
+    private var selectedTarget: QuickAskTarget? {
         guard let id = botPopup.selectedItem?.representedObject as? String else { return nil }
-        return bots.first { $0.id == id }
+        if let bot = bots.first(where: { QuickAskTargets.botId($0.id) == id }) { return .bot(bot) }
+        if let dispatcher = dispatchers.first(where: { QuickAskTargets.dispatcherId($0.agentId) == id }) {
+            return .dispatcher(dispatcher)
+        }
+        return nil
     }
 
     private func updateQuickControls() {
@@ -315,9 +356,9 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         let showStop = inChat && turnRunning
         stopButton.isHidden = !showStop
         quickSendButton.isHidden = showStop
-        quickSendButton.isEnabled = !isSending && (inChat || selectedBot != nil)
+        quickSendButton.isEnabled = !isSending && (inChat || selectedTarget != nil)
         inputTextView.isEditable = !isSending
-        botPopup.isEnabled = !inChat && !isSending && !bots.isEmpty
+        botPopup.isEnabled = !inChat && !isSending && !(bots.isEmpty && dispatchers.isEmpty)
     }
 
     private func setBannerVisible(_ visible: Bool) {
@@ -625,8 +666,8 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
                 guard !turnRunning, let text = validated(inputTextView.string) else { return }
                 onFollowUp?(text)
             } else {
-                guard let bot = selectedBot, let text = validated(inputTextView.string) else { return }
-                onAsk?(bot, text)
+                guard let target = selectedTarget, let text = validated(inputTextView.string) else { return }
+                onAsk?(target, text)
             }
         }
     }

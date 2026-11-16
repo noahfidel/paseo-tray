@@ -17,8 +17,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
         panel.onSubmit = { [weak self] bot, prompt in
             self?.submitPrompt(bot: bot, prompt: prompt)
         }
-        panel.onAsk = { [weak self] bot, prompt in
-            self?.askBot(bot, prompt: prompt)
+        panel.onAsk = { [weak self] target, prompt in
+            switch target {
+            case .bot(let bot): self?.askBot(bot, prompt: prompt)
+            case .dispatcher(let dispatcher): self?.askDispatcher(dispatcher, prompt: prompt)
+            }
         }
         panel.onFollowUp = { [weak self] text in
             self?.sendFollowUp(text)
@@ -355,9 +358,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
 
     /// Shows the Quick Ask panel. Does nothing when paseo-bots isn't installed (no tray.json).
     func showQuickAsk() {
-        guard TrayBotsFile.load() != nil else { return }
+        // Dispatchers don't need paseo-bots, so they keep Quick Ask usable without it.
+        guard TrayBotsFile.load() != nil || !dispatcherStore.dispatchers().isEmpty else { return }
         if quickAskPanel.isQuickAskVisible {
             quickAskPanel.present(mode: .quickAsk)
+            if quickAskPanel.chatAgentId == nil { refreshQuickAskDispatchers() }
             // An earlier fetch failed: try again instead of leaving an empty picker.
             if quickAskPanel.bots.isEmpty, quickAskPanel.chatAgentId == nil {
                 loadQuickAskBots()
@@ -365,7 +370,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             return
         }
         quickAskPanel.present(mode: .quickAsk)
+        refreshQuickAskDispatchers()
         loadQuickAskBots()
+    }
+
+    /// Dispatchers are known immediately (the store is live); an empty list leaves the picker as it is.
+    private func refreshQuickAskDispatchers() {
+        let list = dispatcherStore.dispatchers()
+        if !list.isEmpty || !quickAskPanel.dispatchers.isEmpty {
+            quickAskPanel.setDispatchers(list)
+        }
     }
 
     private func loadQuickAskBots() {
@@ -415,6 +429,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             case .failure(let error):
                 self.quickAskPanel.showError(error.message)
             }
+        }
+    }
+
+    /// Continues the dispatcher's one existing chat; never interrupts a running turn and never
+    /// answers a permission request (the panel's banner only points to Paseo).
+    private func askDispatcher(_ dispatcher: TrayDispatcher, prompt: String) {
+        guard connection.phase == .connected else {
+            quickAskPanel.showError(L("Paseo isn't connected", "Paseo 未连接"))
+            return
+        }
+        guard let current = dispatcherStore.dispatchers().first(where: { $0.agentId == dispatcher.agentId }) else {
+            quickAskPanel.showError(L("That dispatcher is no longer available", "该调度器已不可用"))
+            return
+        }
+        if current.status == "running" {
+            quickAskPanel.showError(L("\(current.name) is busy; try again when it finishes",
+                                      "\(current.name) 正在处理中，请稍后再试"))
+            return
+        }
+        quickAskPanel.clearError()
+        quickAskPanel.chatStarted(agentId: current.agentId)
+        timelineClient.watch(agentId: current.agentId)
+        if timelineClient.sendFollowUp(prompt) {
+            quickAskPanel.clearFollowUp()
+        } else {
+            quickAskPanel.showError(L("Paseo isn't connected", "Paseo 未连接"))
         }
     }
 

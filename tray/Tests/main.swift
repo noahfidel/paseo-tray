@@ -27,6 +27,7 @@ runBotRecentsTests()
 runHotKeySpecTests()
 runEditMenuSpecTests()
 runDispatcherStoreTests()
+runQuickAskTargetsTests()
 
 if failureCount == 0 {
     print("ALL \(testCount) TESTS PASSED")
