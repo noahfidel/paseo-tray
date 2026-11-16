@@ -98,7 +98,9 @@ if hasFlag("--quick-ask-status") {
 }
 
 if hasFlag("--self-check") {
-    exit(AgentStore.runSelfCheck() ? 0 : 1)
+    let agentStoreOK = AgentStore.runSelfCheck()
+    let editMenuOK = EditMenu.selfCheck()
+    exit(agentStoreOK && editMenuOK ? 0 : 1)
 }
 
 if hasFlag("--login-item-status") {

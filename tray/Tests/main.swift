@@ -25,6 +25,7 @@ runTimelineClientTests()
 runChatMarkdownTests()
 runBotRecentsTests()
 runHotKeySpecTests()
+runEditMenuSpecTests()
 
 if failureCount == 0 {
     print("ALL \(testCount) TESTS PASSED")

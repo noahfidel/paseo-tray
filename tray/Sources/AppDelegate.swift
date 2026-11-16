@@ -70,6 +70,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // The tray is an accessory app so the menu bar never shows this; it exists only so Cmd+C/X/V/A/Z reach text views.
+        NSApp.mainMenu = EditMenu.makeMainMenu()
         configStore = TrayConfigStore()
         let loaded = configStore.load()
         config = loaded.config
