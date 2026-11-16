@@ -474,6 +474,8 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         botPopup.translatesAutoresizingMaskIntoConstraints = false
         botPopup.target = self
         botPopup.action = #selector(botChanged)
+        // Keep the "Dispatchers" header (and "No bots") disabled: auto-enabling would make them selectable.
+        botPopup.autoenablesItems = false
 
         headerOpenButton.translatesAutoresizingMaskIntoConstraints = false
         headerOpenButton.title = L("Open in Paseo", "在 Paseo 中打开")
