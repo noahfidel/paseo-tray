@@ -307,6 +307,15 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         updateQuickControls()
     }
 
+    /// A send that never left: put the typed text back and let the user try again.
+    func restoreInput(_ text: String) {
+        guard chatAgentId != nil else { return }
+        inputTextView.string = text
+        turnRunning = false
+        followUpPending = false
+        updateQuickControls()
+    }
+
     /// The daemon rejected the follow-up: undo the optimistic running state so the panel isn't stuck.
     func followUpFailed() {
         guard followUpPending else { return }

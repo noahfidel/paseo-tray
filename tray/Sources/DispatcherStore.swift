@@ -43,6 +43,12 @@ struct TrayDispatcher: Equatable {
     let needsYou: Bool
     let status: String
 
+    /// Quick Ask may message it only when idle or errored and not waiting on a permission, so the
+    /// server's default interrupt can never cancel a running turn or a pending request.
+    var isAskable: Bool {
+        (status == "idle" || status == "error") && !needsYou
+    }
+
     /// Menu title; a needs-you dispatcher gets a leading dot and a suffix.
     var menuTitle: String {
         needsYou ? L("● \(name) — needs you", "● \(name) — 需要你处理") : name

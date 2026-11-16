@@ -25,4 +25,14 @@ func runQuickAskTargetsTests() {
     let marked = QuickAskTargets.items(bots: none, dispatchers: [(id: needs.agentId, title: needs.menuTitle)])
     expect(marked.last == .item(id: "dispatcher:a3", title: needs.menuTitle) && needs.menuTitle.hasPrefix("● "),
            "quickAskTargets: needs-you dispatcher title is marked")
+
+    func d(_ status: String, _ needs: Bool = false) -> TrayDispatcher {
+        TrayDispatcher(agentId: "a", groupId: "g", name: "N", needsYou: needs, status: status)
+    }
+    expect(d("idle").isAskable, "askable: idle")
+    expect(d("error").isAskable, "askable: error")
+    expect(!d("running").isAskable, "askable: running is not")
+    expect(!d("initializing").isAskable, "askable: initializing is not")
+    expect(!d("closed").isAskable, "askable: closed is not")
+    expect(!d("idle", true).isAskable, "askable: idle with needs-you is not")
 }

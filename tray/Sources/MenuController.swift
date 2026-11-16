@@ -430,6 +430,12 @@ final class MenuController: NSObject, NSMenuDelegate {
             if !dispatcher.status.isEmpty { item.toolTip = dispatcher.status }
             sub.addItem(item)
         }
+        if !botsVisible {
+            // No Bots submenu to hold Quick Ask: dispatcher-only setups get it here.
+            sub.addItem(.separator())
+            addQuickAskItem(to: sub)
+            if let last = sub.items.last, last.isSeparatorItem { sub.removeItem(last) }
+        }
         parent.submenu = sub
         menu.addItem(parent)
     }

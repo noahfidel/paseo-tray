@@ -443,17 +443,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             quickAskPanel.showError(L("That dispatcher is no longer available", "该调度器已不可用"))
             return
         }
-        if current.status == "running" {
+        if current.needsYou {
+            quickAskPanel.showError(L("\(current.name) is waiting for you in Paseo",
+                                      "\(current.name) 正在 Paseo 中等你处理"))
+            return
+        }
+        if !current.isAskable {
             quickAskPanel.showError(L("\(current.name) is busy; try again when it finishes",
                                       "\(current.name) 正在处理中，请稍后再试"))
             return
         }
         quickAskPanel.clearError()
+        // Send before the panel switches to chat mode is not possible (the client needs the watch
+        // first), so on failure put the prompt back into the input.
         quickAskPanel.chatStarted(agentId: current.agentId)
         timelineClient.watch(agentId: current.agentId)
         if timelineClient.sendFollowUp(prompt) {
             quickAskPanel.clearFollowUp()
         } else {
+            quickAskPanel.restoreInput(prompt)
             quickAskPanel.showError(L("Paseo isn't connected", "Paseo 未连接"))
         }
     }
