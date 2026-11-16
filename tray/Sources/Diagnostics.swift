@@ -83,7 +83,7 @@ final class Diagnostics: NSObject, PaseoClientDelegate {
                     self?.finish(code: 0, reason: "snapshot")
                 }
             }
-        case .timelineMessage:
+        case .timelineMessage, .dispatcherSnapshot, .dispatcherUpdate:
             break
         case .agentUpdate(let payload):
             store.apply(update: payload)

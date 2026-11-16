@@ -34,6 +34,10 @@ enum PaseoClientEvent {
     case status(PaseoConnectionStatus)
     case snapshot(entries: [[String: Any]], hasMore: Bool, serverId: String)
     case agentUpdate([String: Any])
+    /// Raw `entries` of the Flowly-dispatcher subscription's snapshot (empty when it failed).
+    case dispatcherSnapshot(entries: [[String: Any]])
+    /// `agent_update` payload tagged with the dispatcher subscription's id.
+    case dispatcherUpdate([String: Any])
     case attention([String: Any])
     /// Timeline traffic for `TimelineClient`: payload of the session message `type`.
     case timelineMessage(type: String, payload: [String: Any])
@@ -86,6 +90,12 @@ final class PaseoClient {
     private var serverId: String?
     private var agentsRequestId: String?
     private var eventsRequestId: String?
+    private var dispatchersRequestId: String?
+    private var dispatchersAck = false
+    private var dispatchersTimeoutWorkItem: DispatchWorkItem?
+    /// Subscription ids from the fetch responses; used to route `agent_update` frames.
+    private var mainSubscriptionId: String?
+    private var dispatchersSubscriptionId: String?
     private var agentsAck = false
     private var eventsAck = false
     private var agentsRetryCount = 0
@@ -200,6 +210,8 @@ final class PaseoClient {
         agentsTimeoutWorkItem = nil
         eventsTimeoutWorkItem?.cancel()
         eventsTimeoutWorkItem = nil
+        dispatchersTimeoutWorkItem?.cancel()
+        dispatchersTimeoutWorkItem = nil
         pingTimer?.invalidate()
         pingTimer = nil
         watchdogTimer?.invalidate()
@@ -414,6 +426,44 @@ final class PaseoClient {
         scheduleAgentsTimeout(requestId: requestId)
     }
 
+    /// Second agent subscription for Flowly dispatchers, which live in a background
+    /// workspace the main list leaves out. One try per connection; a failure only
+    /// hides the Dispatchers section and never touches the connection.
+    private func requestDispatchersSubscription() {
+        dispatchersAck = false
+        let requestId = "dispatchers-\(UUID().uuidString.prefix(8))"
+        dispatchersRequestId = requestId
+        sendSession([
+            "type": "fetch_agents_request",
+            "requestId": requestId,
+            "scope": "active",
+            "filter": [
+                "includeArchived": false,
+                "includeBackground": true,
+                "labels": [DispatcherMatch.filterLabelKey: DispatcherMatch.filterLabelValue],
+            ],
+            "page": ["limit": 50],
+            "subscribe": [:],
+        ])
+        dispatchersTimeoutWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.status.phase == .connected,
+                  self.dispatchersRequestId == requestId, !self.dispatchersAck else { return }
+            self.failDispatchers(L("Subscription timed out", "订阅超时"))
+        }
+        dispatchersTimeoutWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + subscriptionTimeout, execute: item)
+    }
+
+    private func failDispatchers(_ error: String) {
+        dispatchersTimeoutWorkItem?.cancel()
+        dispatchersTimeoutWorkItem = nil
+        dispatchersRequestId = nil
+        dispatchersSubscriptionId = nil
+        trayLog("Dispatcher subscription failed: \(error)")
+        delegate?.paseoClient(self, event: .dispatcherSnapshot(entries: []))
+    }
+
     private func requestEventsSubscription() {
         eventsAck = false
         let requestId = "events-\(UUID().uuidString.prefix(8))"
@@ -569,7 +619,12 @@ final class PaseoClient {
             handleFetchAgents(message)
         case "agent_update":
             if let payload = message["payload"] as? [String: Any] {
-                delegate?.paseoClient(self, event: .agentUpdate(payload))
+                if let id = payload["subscriptionId"] as? String,
+                   id == dispatchersSubscriptionId {
+                    delegate?.paseoClient(self, event: .dispatcherUpdate(payload))
+                } else {
+                    delegate?.paseoClient(self, event: .agentUpdate(payload))
+                }
             }
         case "agent_attention_required":
             markEventsAck()
@@ -602,6 +657,10 @@ final class PaseoClient {
         guard let payload = message["payload"] as? [String: Any],
               let requestId = payload["requestId"] as? String else { return }
         let error = payload["error"] as? String ?? L("Request failed", "请求失败")
+        if requestId == dispatchersRequestId {
+            failDispatchers(error)
+            return
+        }
         if requestId == agentsRequestId {
             agentsTimeoutWorkItem?.cancel()
             agentsTimeoutWorkItem = nil
@@ -632,6 +691,12 @@ final class PaseoClient {
         eventsRetryCount = 0
         agentsRequestId = nil
         eventsRequestId = nil
+        dispatchersTimeoutWorkItem?.cancel()
+        dispatchersTimeoutWorkItem = nil
+        dispatchersRequestId = nil
+        dispatchersAck = false
+        mainSubscriptionId = nil
+        dispatchersSubscriptionId = nil
         status = PaseoConnectionStatus(
             phase: .connected,
             detail: L("Connected", "已连接"),
@@ -641,9 +706,28 @@ final class PaseoClient {
         publishStatus()
         requestAgentsSubscription()
         requestEventsSubscription()
+        requestDispatchersSubscription()
+    }
+
+    private func handleDispatchersResponse(_ payload: [String: Any]) {
+        dispatchersAck = true
+        dispatchersTimeoutWorkItem?.cancel()
+        dispatchersTimeoutWorkItem = nil
+        guard let entries = payload["entries"] as? [[String: Any]] else {
+            failDispatchers(L("Unexpected subscription response format", "订阅返回格式不正确"))
+            return
+        }
+        dispatchersSubscriptionId = payload["subscriptionId"] as? String
+        delegate?.paseoClient(self, event: .dispatcherSnapshot(entries: entries))
     }
 
     private func handleFetchAgents(_ message: [String: Any]) {
+        if let payload = message["payload"] as? [String: Any],
+           let requestId = payload["requestId"] as? String,
+           requestId == dispatchersRequestId {
+            handleDispatchersResponse(payload)
+            return
+        }
         guard let payload = message["payload"] as? [String: Any] else {
             retryAgentsSubscription(error: L("Unexpected subscription response format", "订阅返回格式不正确"))
             return
@@ -663,6 +747,7 @@ final class PaseoClient {
             return
         }
         markAgentsAck()
+        mainSubscriptionId = payload["subscriptionId"] as? String
         let pageInfo = payload["pageInfo"] as? [String: Any]
         let hasMore = pageInfo?["hasMore"] as? Bool ?? false
         let id = serverId ?? ""

@@ -26,6 +26,7 @@ runChatMarkdownTests()
 runBotRecentsTests()
 runHotKeySpecTests()
 runEditMenuSpecTests()
+runDispatcherStoreTests()
 
 if failureCount == 0 {
     print("ALL \(testCount) TESTS PASSED")

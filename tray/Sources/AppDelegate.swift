@@ -4,6 +4,8 @@ import Foundation
 final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, MenuControllerDelegate {
     private let isDemo: Bool
     private let store = AgentStore()
+    /// Flowly dispatchers (background agents); the menu and Quick Ask read it.
+    let dispatcherStore = DispatcherStore()
     private let botsClient = BotsClient()
     private var quickAskPanelCreated = false
     private lazy var quickAskPanel: QuickAskPanel = {
@@ -190,6 +192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
         case .status(let status):
             let reconnected = status.phase == .connected && connection.phase != .connected
             connection = status
+            if status.phase != .connected { dispatcherStore.clear() }
             refreshMenu()
             if reconnected { timelineClient.resubscribe() }
         case .timelineMessage(let type, let payload):
@@ -200,6 +203,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             refreshMenu()
         case .agentUpdate(let payload):
             store.apply(update: payload)
+            refreshMenu()
+        case .dispatcherSnapshot(let entries):
+            dispatcherStore.replace(entries: entries)
+            refreshMenu()
+        case .dispatcherUpdate(let payload):
+            dispatcherStore.apply(update: payload)
             refreshMenu()
         case .attention(let payload):
             store.applyAttention(payload: payload)
