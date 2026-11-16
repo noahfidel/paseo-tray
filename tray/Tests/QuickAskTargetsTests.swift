@@ -26,6 +26,10 @@ func runQuickAskTargetsTests() {
     expect(marked.last == .item(id: "dispatcher:a3", title: needs.menuTitle) && needs.menuTitle.hasPrefix("● "),
            "quickAskTargets: needs-you dispatcher title is marked")
 
+    expect(QuickAskTargets.dispatcherId("a1") == "dispatcher:a1"
+           && QuickAskTargets.dispatcherId("a1").dropFirst("dispatcher:".count) == "a1",
+           "quickAskTargets: dispatcher id round-trips its agent id")
+
     func d(_ status: String, _ needs: Bool = false) -> TrayDispatcher {
         TrayDispatcher(agentId: "a", groupId: "g", name: "N", needsYou: needs, status: status)
     }

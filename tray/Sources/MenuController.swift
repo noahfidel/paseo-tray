@@ -5,6 +5,7 @@ protocol MenuControllerDelegate: AnyObject {
     func menuControllerOpenAgent(_ agentId: String)
     func menuControllerOpenBot(_ botId: String)
     func menuControllerQuickAsk()
+    func menuControllerQuickAskDispatcher(_ agentId: String)
     func menuControllerWillOpen()
     func menuControllerNewChatWithPrompt(_ bot: TrayBot)
     func menuControllerOpenPaseo()
@@ -423,18 +424,26 @@ final class MenuController: NSObject, NSMenuDelegate {
         )
         let sub = NSMenu()
         sub.autoenablesItems = false
+        addQuickAskItem(to: sub)
         for dispatcher in dispatchers {
             let item = NSMenuItem(title: dispatcher.menuTitle, action: #selector(openAgent(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = dispatcher.agentId
             if !dispatcher.status.isEmpty { item.toolTip = dispatcher.status }
+            // Alternates need the primary's modifier mask cleared and identical (empty) key equivalents.
+            item.keyEquivalentModifierMask = []
             sub.addItem(item)
-        }
-        if !botsVisible {
-            // No Bots submenu to hold Quick Ask: dispatcher-only setups get it here.
-            sub.addItem(.separator())
-            addQuickAskItem(to: sub)
-            if let last = sub.items.last, last.isSeparatorItem { sub.removeItem(last) }
+
+            let alternate = NSMenuItem(
+                title: L("Ask \(dispatcher.name)…", "询问 \(dispatcher.name)…"),
+                action: #selector(askDispatcher(_:)),
+                keyEquivalent: ""
+            )
+            alternate.target = self
+            alternate.representedObject = dispatcher.agentId
+            alternate.isAlternate = true
+            alternate.keyEquivalentModifierMask = [.option]
+            sub.addItem(alternate)
         }
         parent.submenu = sub
         menu.addItem(parent)
@@ -644,6 +653,11 @@ final class MenuController: NSObject, NSMenuDelegate {
 
     @objc private func quickAsk() {
         delegate?.menuControllerQuickAsk()
+    }
+
+    @objc private func askDispatcher(_ sender: NSMenuItem) {
+        guard let agentId = sender.representedObject as? String else { return }
+        delegate?.menuControllerQuickAskDispatcher(agentId)
     }
 
     @objc private func openPaseo() {

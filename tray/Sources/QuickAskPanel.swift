@@ -359,6 +359,13 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         return nil
     }
 
+    /// Selects a picker target by its QuickAskTargets id; ignored when it isn't in the picker.
+    func selectTarget(id: String) {
+        guard let index = botPopup.itemArray.firstIndex(where: { ($0.representedObject as? String) == id }) else { return }
+        botPopup.selectItem(at: index)
+        updateQuickControls()
+    }
+
     private func updateQuickControls() {
         let inChat = chatAgentId != nil
         quickSendButton.title = inChat ? L("Send", "发送") : L("Ask", "提问")

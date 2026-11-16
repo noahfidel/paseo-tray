@@ -572,7 +572,8 @@ signal comes from `agent_attention_required`, not from `status === "idle"`.
 Flowly dispatchers get their own "Dispatchers" submenu, with one row per board
 group. A dispatcher waiting on a permission shows a leading `●` and "needs
 you", and the submenu title gets the same dot. Clicking a row opens the agent
-in Paseo.
+in Paseo. The submenu starts with "Quick Ask…", and holding ⌥ turns each row
+into "Ask <name>…", which opens Quick Ask with that dispatcher selected.
 
 ### Configuration
 
@@ -613,8 +614,8 @@ returning, so it never reports an old success as a new save.
 ### Quick Ask hotkey
 
 Quick Ask works with paseo-bots bots and/or Flowly dispatchers. Press `⌥Space`
-(Option-Space) to open it, or pick "Quick Ask…" in the Bots menu (or in the
-Dispatchers menu when there are no bots). Messages to a dispatcher steer its
+(Option-Space) to open it, or pick "Quick Ask…" in the Bots or Dispatchers
+menu. Holding ⌥ in the Dispatchers menu shows "Ask <name>…" on each row. Messages to a dispatcher steer its
 current chat: they never interrupt a running turn, and the tray never answers
 a permission request (it only points you to Paseo). Change the shortcut with
 a user default (not `config.json`, which the plugin rewrites):

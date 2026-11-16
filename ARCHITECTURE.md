@@ -152,7 +152,7 @@ provider（kimi、pi 等）的 agent 会从快照和增量更新里整体消失�
 
 `DispatcherStore` 的匹配规则：标签 `flowly-dispatcher=1` 且有非空的 `flowly-dispatcher-group`；排除已归档、`status` 为 `closed` 和 `internal` 的 agent。每个 group 只保留最新的一个（按 `createdAt`，再按 `updatedAt`，再按 id）。名称取标题去掉 “Flowly dispatcher · ” 前缀，没有标题时用 group id 前 8 位。`pendingPermissions` 非空表示“需要你处理”；只有 `idle`/`error` 且无待处理权限时才可被 Quick Ask 提问。断线时清空。
 
-菜单里有 “调度器 / Dispatchers” 子菜单（至少有一个调度器时显示），任一调度器需要你处理时标题前加 `●`。点击条目打开该 agent；没有 Bots 子菜单时，Quick Ask 入口放在这里。
+菜单里有 “调度器 / Dispatchers” 子菜单（至少有一个调度器时显示），任一调度器需要你处理时标题前加 `●`。子菜单第一行是 Quick Ask…；点击条目打开该 agent，按住 ⌥ 时条目变为 “询问 <名称>…”（NSMenuItem 备用项），打开 Quick Ask 并选中该调度器。
 
 订阅有独立的 ack 和重试：
 
