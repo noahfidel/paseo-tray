@@ -25,6 +25,7 @@ final class TimelineClient {
     private var reportedDisconnect = false
     /// Invalidates scheduled retries when the watch changes.
     private var retryToken = 0
+    private var activeTurnBehavior: String?
 
     init(send: @escaping ([String: Any]) -> Bool) {
         self.send = send
@@ -32,8 +33,11 @@ final class TimelineClient {
 
     // MARK: Commands
 
-    func watch(agentId: String) {
+    /// `activeTurnBehavior` (e.g. "steer") rides along on follow-ups so a send never interrupts a
+    /// running turn; nil leaves the key out and keeps the server default.
+    func watch(agentId: String, activeTurnBehavior: String? = nil) {
         self.agentId = agentId
+        self.activeTurnBehavior = activeTurnBehavior
         state = TimelineState()
         pendingMessageIds = []
         beginWatch()
@@ -70,13 +74,15 @@ final class TimelineClient {
         retryCount = 0
         let requestId = Self.newId("msg")
         pendingMessageIds.insert(requestId)
-        if !send([
+        var request: [String: Any] = [
             "type": "send_agent_message_request",
             "requestId": requestId,
             "agentId": agentId,
             "text": text,
             "messageId": UUID().uuidString,
-        ]) {
+        ]
+        if let activeTurnBehavior { request["activeTurnBehavior"] = activeTurnBehavior }
+        if !send(request) {
             pendingMessageIds.remove(requestId)
             notConnected()
             return false

@@ -569,6 +569,11 @@ paseo://h/<serverId>/agent/<agentId>
 Plain `idle` agents (the `done` bucket) are not shown or counted. The finished
 signal comes from `agent_attention_required`, not from `status === "idle"`.
 
+Flowly dispatchers get their own "Dispatchers" submenu, with one row per board
+group. A dispatcher waiting on a permission shows a leading `●` and "needs
+you", and the submenu title gets the same dot. Clicking a row opens the agent
+in Paseo.
+
 ### Configuration
 
 Shared file:
@@ -607,8 +612,11 @@ returning, so it never reports an old success as a new save.
 
 ### Quick Ask hotkey
 
-With the paseo-bots plugin installed, press `⌥Space` (Option-Space) to
-open Quick Ask, or pick "Quick Ask…" in the Bots menu. Change the shortcut with
+Quick Ask works with paseo-bots bots and/or Flowly dispatchers. Press `⌥Space`
+(Option-Space) to open it, or pick "Quick Ask…" in the Bots menu (or in the
+Dispatchers menu when there are no bots). Messages to a dispatcher steer its
+current chat: they never interrupt a running turn, and the tray never answers
+a permission request (it only points you to Paseo). Change the shortcut with
 a user default (not `config.json`, which the plugin rewrites):
 
 ```bash

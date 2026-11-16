@@ -140,6 +140,20 @@ provider（kimi、pi 等）的 agent 会从快照和增量更新里整体消失�
 
 `pageInfo.hasMore` 为 true 时菜单显示“只显示前 200 个”。重连后重新发订阅，不复用旧 `subscriptionId`。
 
+#### 第二个订阅：Flowly 调度器
+
+连接后另发一个 `fetch_agents_request`（`includeBackground: true`，`filter.labels` 为 `flowly-dispatcher=1`，同样带 `subscribe`），只用来看 Flowly 调度器。`agent_update` 按 `subscriptionId` 分流：
+
+- 等于调度器订阅的 id → `DispatcherStore`。
+- 等于主订阅的 id，或没有 `subscriptionId` → 主列表。
+- 其他 id → 丢弃。
+
+这个订阅失败（超时、`rpc_error`、响应格式不对）只写日志并发布空快照，不重连、不重试，也不影响主订阅和状态。
+
+`DispatcherStore` 的匹配规则：标签 `flowly-dispatcher=1` 且有非空的 `flowly-dispatcher-group`；排除已归档、`status` 为 `closed` 和 `internal` 的 agent。每个 group 只保留最新的一个（按 `createdAt`，再按 `updatedAt`，再按 id）。名称取标题去掉 “Flowly dispatcher · ” 前缀，没有标题时用 group id 前 8 位。`pendingPermissions` 非空表示“需要你处理”；只有 `idle`/`error` 且无待处理权限时才可被 Quick Ask 提问。断线时清空。
+
+菜单里有 “调度器 / Dispatchers” 子菜单（至少有一个调度器时显示），任一调度器需要你处理时标题前加 `●`。点击条目打开该 agent；没有 Bots 子菜单时，Quick Ask 入口放在这里。
+
 订阅有独立的 ack 和重试：
 
 - agents 和 events 各有一个 8 秒超时。
@@ -222,6 +236,7 @@ offline ──发现 pid──> connecting ──server_info──> connected
 - 指数退避：1 → 2 → 5 → 10 → 30 秒。
 - 鉴权失败/协议不兼容：30 秒固定重试，不无限快速重试。
 - 连接成功但 8 秒内没有 `fetch_agents_response`：保留连接，标记“订阅失败/订阅超时”，菜单显示提示。
+- 调度器订阅失败不触发重连：只记日志，调度器列表为空。
 - 每次重连前重读 `paseo.pid`，所以 daemon 换端口也能恢复。
 - 系统唤醒（`NSWorkspace.didWakeNotification`）立即重连。
 

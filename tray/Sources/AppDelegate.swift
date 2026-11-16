@@ -196,7 +196,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
         case .status(let status):
             let reconnected = status.phase == .connected && connection.phase != .connected
             connection = status
-            if status.phase != .connected { dispatcherStore.clear() }
+            if status.phase != .connected {
+                dispatcherStore.clear()
+                registerHotKey()
+            }
             refreshMenu()
             if reconnected { timelineClient.resubscribe() }
         case .timelineMessage(let type, let payload):
@@ -210,9 +213,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             refreshMenu()
         case .dispatcherSnapshot(let entries):
             dispatcherStore.replace(entries: entries)
+            registerHotKey()
             refreshMenu()
         case .dispatcherUpdate(let payload):
             dispatcherStore.apply(update: payload)
+            registerHotKey()
             refreshMenu()
         case .attention(let payload):
             store.applyAttention(payload: payload)
@@ -321,11 +326,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
     // MARK: - Quick Ask
 
     /// (Re)registers the global hotkey from the `QuickAskHotkey` default; does nothing when the setting is unchanged.
-    /// Registers only while tray.json exists (paseo-bots installed) and never in demo mode.
+    /// Registers only while Quick Ask has a target (tray.json exists, or at least one Flowly
+    /// dispatcher is known) and never in demo mode.
     private func registerHotKey() {
         guard !isDemo else { return }
         let setting = QuickAskHotkeySetting.resolve()
-        let available = TrayBotsFile.load() != nil
+        let available = TrayBotsFile.load() != nil || !dispatcherStore.dispatchers().isEmpty
         if let previous = hotKeyString, previous == setting.string, hotKeyAvailable == available { return }
         hotKeyString = .some(setting.string)
         hotKeyAvailable = available
@@ -356,7 +362,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
         showQuickAsk()
     }
 
-    /// Shows the Quick Ask panel. Does nothing when paseo-bots isn't installed (no tray.json).
+    /// Shows the Quick Ask panel. Does nothing when there is no target: no tray.json (paseo-bots) and no Flowly dispatchers.
     func showQuickAsk() {
         // Dispatchers don't need paseo-bots, so they keep Quick Ask usable without it.
         guard TrayBotsFile.load() != nil || !dispatcherStore.dispatchers().isEmpty else { return }
@@ -434,6 +440,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
 
     /// Continues the dispatcher's one existing chat; never interrupts a running turn and never
     /// answers a permission request (the panel's banner only points to Paseo).
+    /// Sends steer: Flowly can start a turn between the isAskable check and the send, and the
+    /// server's default would interrupt it. The server also clears pending permissions on any
+    /// human message, so a permission that appears in that gap is cleared by the server; the tray
+    /// never answers one deliberately.
     private func askDispatcher(_ dispatcher: TrayDispatcher, prompt: String) {
         guard connection.phase == .connected else {
             quickAskPanel.showError(L("Paseo isn't connected", "Paseo 未连接"))
@@ -457,7 +467,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
         // Send before the panel switches to chat mode is not possible (the client needs the watch
         // first), so on failure put the prompt back into the input.
         quickAskPanel.chatStarted(agentId: current.agentId)
-        timelineClient.watch(agentId: current.agentId)
+        timelineClient.watch(agentId: current.agentId, activeTurnBehavior: "steer")
         if timelineClient.sendFollowUp(prompt) {
             quickAskPanel.clearFollowUp()
         } else {

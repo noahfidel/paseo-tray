@@ -234,7 +234,18 @@ func testFailedStopSurfacesError() {
     expect(errors().last == "nope", "testFailedStopSurfacesError: response error reported")
 }
 
+func testActiveTurnBehaviorOnFollowUp() {
+    let (client, sender, _) = makeClient()
+    client.watch(agentId: "a1", activeTurnBehavior: "steer")
+    client.sendFollowUp("hi")
+    expect(sender.messages("send_agent_message_request").last?["activeTurnBehavior"] as? String == "steer", "steer watch sends activeTurnBehavior")
+    client.watch(agentId: "a2")
+    client.sendFollowUp("hi")
+    expect(sender.messages("send_agent_message_request").last?["activeTurnBehavior"] == nil, "plain watch sends no activeTurnBehavior")
+}
+
 func runTimelineClientTests() {
+    testActiveTurnBehaviorOnFollowUp()
     testFailedStopSurfacesError()
     testLostFollowUpSurfacedOnResubscribe()
     testRefetchResumesAfterGiveUpAndResubscribe()
