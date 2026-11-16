@@ -212,6 +212,8 @@ final class PaseoClient {
         eventsTimeoutWorkItem = nil
         dispatchersTimeoutWorkItem?.cancel()
         dispatchersTimeoutWorkItem = nil
+        mainSubscriptionId = nil
+        dispatchersSubscriptionId = nil
         pingTimer?.invalidate()
         pingTimer = nil
         watchdogTimer?.invalidate()
@@ -619,9 +621,13 @@ final class PaseoClient {
             handleFetchAgents(message)
         case "agent_update":
             if let payload = message["payload"] as? [String: Any] {
-                if let id = payload["subscriptionId"] as? String,
-                   id == dispatchersSubscriptionId {
-                    delegate?.paseoClient(self, event: .dispatcherUpdate(payload))
+                if let id = payload["subscriptionId"] as? String {
+                    if id == dispatchersSubscriptionId {
+                        delegate?.paseoClient(self, event: .dispatcherUpdate(payload))
+                    } else if id == mainSubscriptionId {
+                        delegate?.paseoClient(self, event: .agentUpdate(payload))
+                    }
+                    // Any other id belongs to a subscription this client doesn't know: drop it.
                 } else {
                     delegate?.paseoClient(self, event: .agentUpdate(payload))
                 }

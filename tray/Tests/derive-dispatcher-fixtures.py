@@ -3,7 +3,10 @@
 
 dispatchers-snapshot.json is a recorded fetch_agents_response (scripts outside the repo:
 hello + fetch_agents_request with filter.labels {"flowly-dispatcher": "1"}, includeBackground,
-no subscribe). Every line written here is an agent_update payload built from that snapshot's
+no subscribe), then trimmed to the fields the tray reads (id, title, status, labels, archivedAt,
+internal, createdAt, updatedAt, pendingPermissions, requiresAttention, attentionReason; project
+keeps projectKey/projectName/workspaceName) so no system prompts or local paths ship. Values are
+exactly as recorded. Every line written here is an agent_update payload built from that snapshot's
 agents with a field edited (pendingPermissions, status, id/createdAt), never an invented shape.
 The pendingPermissions entry shape is hand-written: no recorded dispatcher had one pending.
 Lines, in order (the tests rely on it):
