@@ -5,7 +5,7 @@ protocol MenuControllerDelegate: AnyObject {
     func menuControllerOpenAgent(_ agentId: String)
     func menuControllerOpenBot(_ botId: String)
     func menuControllerQuickAsk()
-    func menuControllerQuickAskDispatcher(_ agentId: String)
+    func menuControllerQuickAsk(targetId: String)
     func menuControllerWillOpen()
     func menuControllerNewChatWithPrompt(_ bot: TrayBot)
     func menuControllerOpenPaseo()
@@ -37,9 +37,9 @@ final class MenuController: NSObject, NSMenuDelegate {
     private var quickAskShortcut: HotKeySpec?
     private var dispatchers: [TrayDispatcher] = []
 
-    private let botsItem = NSMenuItem(title: L("Bots", "机器人"), action: nil, keyEquivalent: "")
-    private let botsSubmenu = NSMenu()
-    private var botsSubmenuStale = false
+    private let quickAskItem = NSMenuItem(title: L("Quick Ask", "快速提问"), action: nil, keyEquivalent: "")
+    private let quickAskSubmenu = NSMenu()
+    private var quickAskSubmenuStale = false
 
     private enum BotsState: Equatable {
         case loading
@@ -69,15 +69,15 @@ final class MenuController: NSObject, NSMenuDelegate {
 
         menu.autoenablesItems = false
         menu.delegate = self
-        botsSubmenu.autoenablesItems = false
-        botsItem.submenu = botsSubmenu
-        populateBotsSubmenu()
+        quickAskSubmenu.autoenablesItems = false
+        quickAskItem.submenu = quickAskSubmenu
+        populateQuickAskSubmenu()
         botsClient.onImageLoaded = { [weak self] in
             guard let self else { return }
             if self.menuIsOpen {
-                self.botsSubmenuStale = true
+                self.quickAskSubmenuStale = true
             } else {
-                self.populateBotsSubmenu()
+                self.populateQuickAskSubmenu()
             }
         }
         statusItem.menu = menu
@@ -145,7 +145,7 @@ final class MenuController: NSObject, NSMenuDelegate {
     /// The registered global shortcut, shown next to "Quick Ask…" (nil: none registered).
     func setQuickAskShortcut(_ spec: HotKeySpec?) {
         quickAskShortcut = spec
-        populateBotsSubmenu()
+        populateQuickAskSubmenu()
     }
 
     func setBotChatError(_ message: String?) {
@@ -166,9 +166,9 @@ final class MenuController: NSObject, NSMenuDelegate {
     func menuDidClose(_ menu: NSMenu) {
         guard menu === self.menu else { return }
         menuIsOpen = false
-        if botsSubmenuStale {
-            botsSubmenuStale = false
-            populateBotsSubmenu()
+        if quickAskSubmenuStale {
+            quickAskSubmenuStale = false
+            populateQuickAskSubmenu()
         }
         if chatErrorShownWhileOpen {
             chatError = nil
@@ -189,10 +189,10 @@ final class MenuController: NSObject, NSMenuDelegate {
             case .loaded(let bots): newState = .loaded(bots)
             }
             if newState == self.botsState { return }
-            let wasVisible = self.botsVisible
+            let wasVisible = !self.quickAskRows().isEmpty
             self.botsState = newState
-            self.populateBotsSubmenu()
-            if self.botsVisible != wasVisible || self.botsItem.menu == nil {
+            self.populateQuickAskSubmenu()
+            if (!self.quickAskRows().isEmpty) != wasVisible || (wasVisible && self.quickAskItem.menu == nil) {
                 self.refresh()
             }
         }
@@ -344,12 +344,12 @@ final class MenuController: NSObject, NSMenuDelegate {
             addDisabled(L("⚠︎ Bot chat: \(chatError)", "⚠︎ 机器人对话：\(chatError)"))
             if menuIsOpen { chatErrorShownWhileOpen = true }
         }
-        if !isDemo && botsVisible {
-            botsItem.menu?.removeItem(botsItem)
-            menu.addItem(botsItem)
-        }
-        if !isDemo && connection.phase == .connected && !dispatchers.isEmpty {
-            addDispatchersItem()
+        quickAskItem.menu?.removeItem(quickAskItem)
+        if !isDemo && !quickAskRows().isEmpty {
+            // Repopulated here so a dispatcher's needs-you marker updates live while the menu is open.
+            populateQuickAskSubmenu()
+            quickAskItem.title = QuickAskMenu.title(dispatchers: dispatchers)
+            menu.addItem(quickAskItem)
         }
 
         menu.addItem(.separator())
@@ -407,49 +407,25 @@ final class MenuController: NSObject, NSMenuDelegate {
         }
     }
 
-    private var botsVisible: Bool {
+    private var quickAskBotsPart: QuickAskMenu.Bots {
         switch botsState {
-        case .notInstalled, .unreachable: return false
-        case .loading: return TrayBotsFile.load() != nil
-        case .failed, .loaded: return true
+        case .notInstalled, .unreachable, .failed: return .hidden
+        case .loading: return TrayBotsFile.load() != nil ? .loading : .hidden
+        case .loaded(let bots): return .loaded(bots.map { QuickAskMenu.Bot(id: $0.id, name: $0.name) })
         }
     }
 
-    /// Rebuilt with the menu, which already refreshes while open, so the marker never goes stale.
-    private func addDispatchersItem() {
-        let parent = NSMenuItem(
-            title: TrayDispatcher.parentMenuTitle(L("Dispatchers", "调度器"), for: dispatchers),
-            action: nil,
-            keyEquivalent: ""
+    private func quickAskRows() -> [QuickAskMenu.Row] {
+        if isDemo { return [] }
+        return QuickAskMenu.rows(
+            connected: connection.phase == .connected,
+            bots: quickAskBotsPart,
+            recent: BotRecents.recentIds(),
+            dispatchers: dispatchers
         )
-        let sub = NSMenu()
-        sub.autoenablesItems = false
-        addQuickAskItem(to: sub)
-        for dispatcher in dispatchers {
-            let item = NSMenuItem(title: dispatcher.menuTitle, action: #selector(openAgent(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = dispatcher.agentId
-            if !dispatcher.status.isEmpty { item.toolTip = dispatcher.status }
-            // Alternates need the primary's modifier mask cleared and identical (empty) key equivalents.
-            item.keyEquivalentModifierMask = []
-            sub.addItem(item)
-
-            let alternate = NSMenuItem(
-                title: L("Ask \(dispatcher.name)…", "询问 \(dispatcher.name)…"),
-                action: #selector(askDispatcher(_:)),
-                keyEquivalent: ""
-            )
-            alternate.target = self
-            alternate.representedObject = dispatcher.agentId
-            alternate.isAlternate = true
-            alternate.keyEquivalentModifierMask = [.option]
-            sub.addItem(alternate)
-        }
-        parent.submenu = sub
-        menu.addItem(parent)
     }
 
-    private func addQuickAskItem(to target: NSMenu) {
+    private func addQuickAskItem(to target: NSMenu, separator: Bool = true) {
         let item = NSMenuItem(title: L("Quick Ask…", "快速提问…"), action: #selector(quickAsk), keyEquivalent: "")
         item.target = self
         if let spec = quickAskShortcut {
@@ -462,71 +438,84 @@ final class MenuController: NSObject, NSMenuDelegate {
             item.keyEquivalentModifierMask = mask
         }
         target.addItem(item)
-        target.addItem(.separator())
+        if separator { target.addItem(.separator()) }
     }
 
-    private func populateBotsSubmenu() {
-        let sub = botsSubmenu
+    private func populateQuickAskSubmenu() {
+        let sub = quickAskSubmenu
         sub.removeAllItems()
-        if botsVisible { addQuickAskItem(to: sub) }
+        var botsById: [String: TrayBot] = [:]
+        if case .loaded(let bots) = botsState { for bot in bots { botsById[bot.id] = bot } }
+        let dispatchersById = Dictionary(dispatchers.map { ($0.agentId, $0) }, uniquingKeysWith: { first, _ in first })
 
-        switch botsState {
-        case .notInstalled, .unreachable:
-            break
-        case .loading:
-            addDisabled(L("Loading…", "加载中…"), to: sub)
-        case .failed(let message):
-            addDisabled("⚠︎ \(message)", to: sub)
-        case .loaded(let bots):
-            if bots.isEmpty {
-                addDisabled(L("No bots", "暂无机器人"), to: sub)
-            } else {
-                var teamOrder: [String] = []
-                var teamNames: [String: String] = [:]
-                var byTeam: [String: [TrayBot]] = [:]
-                var ungrouped: [TrayBot] = []
-                for bot in bots {
-                    if let team = bot.team {
-                        if byTeam[team.id] == nil {
-                            teamOrder.append(team.id)
-                            teamNames[team.id] = team.name
-                        }
-                        byTeam[team.id, default: []].append(bot)
-                    } else {
-                        ungrouped.append(bot)
-                    }
+        for row in quickAskRows() {
+            switch row {
+            case .quickAsk:
+                addQuickAskItem(to: sub, separator: false)
+            case .separator:
+                sub.addItem(.separator())
+            case .header(let title):
+                addHeader(title, to: sub)
+            case .loading:
+                addDisabled(L("Loading…", "加载中…"), to: sub)
+            case .bot(let id, let name):
+                let bot = botsById[id]
+                let item = NSMenuItem(title: name, action: #selector(quickAskTarget(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = QuickAskTargets.botId(id)
+                if let bot {
+                    item.image = botsClient.avatarImage(for: bot)
+                    if !bot.title.isEmpty { item.toolTip = bot.title }
                 }
-                addBots(ungrouped, to: sub)
-                for id in teamOrder {
-                    addHeader(teamNames[id] ?? id, to: sub)
-                    addBots(byTeam[id] ?? [], to: sub)
+                // Alternates need the primary's modifier mask cleared and identical (empty) key equivalents.
+                item.keyEquivalentModifierMask = []
+                sub.addItem(item)
+
+                let open = NSMenuItem(
+                    title: L("Open \(name) in Paseo", "在 Paseo 中打开 \(name)"),
+                    action: #selector(openBot(_:)),
+                    keyEquivalent: ""
+                )
+                open.target = self
+                open.representedObject = id
+                open.image = item.image
+                open.isAlternate = true
+                open.keyEquivalentModifierMask = [.option]
+                sub.addItem(open)
+
+                if let bot {
+                    let newChat = NSMenuItem(
+                        title: L("New chat with \(name)…", "与 \(name) 新建对话…"),
+                        action: #selector(newChatWithPrompt(_:)),
+                        keyEquivalent: ""
+                    )
+                    newChat.target = self
+                    newChat.representedObject = bot
+                    newChat.image = item.image
+                    newChat.isAlternate = true
+                    newChat.keyEquivalentModifierMask = [.option, .shift]
+                    sub.addItem(newChat)
                 }
+            case .dispatcher(let agentId, let name, let title, let needsYou):
+                let item = NSMenuItem(title: title, action: #selector(quickAskTarget(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = QuickAskTargets.dispatcherId(agentId)
+                if let status = dispatchersById[agentId]?.status, !status.isEmpty { item.toolTip = status }
+                item.keyEquivalentModifierMask = []
+                sub.addItem(item)
+
+                let openName = L("Open \(name) in Paseo", "在 Paseo 中打开 \(name)")
+                let open = NSMenuItem(
+                    title: needsYou ? "● " + openName : openName,
+                    action: #selector(openAgent(_:)),
+                    keyEquivalent: ""
+                )
+                open.target = self
+                open.representedObject = agentId
+                open.isAlternate = true
+                open.keyEquivalentModifierMask = [.option]
+                sub.addItem(open)
             }
-        }
-    }
-
-    private func addBots(_ bots: [TrayBot], to target: NSMenu) {
-        for bot in bots {
-            let item = NSMenuItem(title: bot.name, action: #selector(openBot(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = bot.id
-            item.image = botsClient.avatarImage(for: bot)
-            if !bot.title.isEmpty { item.toolTip = bot.title }
-            // Alternates need the primary's modifier mask cleared and identical (empty) key equivalents.
-            item.keyEquivalentModifierMask = []
-            target.addItem(item)
-
-            let alternate = NSMenuItem(
-                title: L("New chat with \(bot.name)…", "与 \(bot.name) 新建对话…"),
-                action: #selector(newChatWithPrompt(_:)),
-                keyEquivalent: ""
-            )
-            alternate.target = self
-            alternate.representedObject = bot
-            alternate.image = item.image
-            alternate.isAlternate = true
-            alternate.keyEquivalentModifierMask = [.option]
-            target.addItem(alternate)
         }
     }
 
@@ -655,9 +644,13 @@ final class MenuController: NSObject, NSMenuDelegate {
         delegate?.menuControllerQuickAsk()
     }
 
-    @objc private func askDispatcher(_ sender: NSMenuItem) {
-        guard let agentId = sender.representedObject as? String else { return }
-        delegate?.menuControllerQuickAskDispatcher(agentId)
+    @objc private func quickAskTarget(_ sender: NSMenuItem) {
+        guard let targetId = sender.representedObject as? String else { return }
+        if isDemo {
+            NSSound.beep()
+            return
+        }
+        delegate?.menuControllerQuickAsk(targetId: targetId)
     }
 
     @objc private func openPaseo() {

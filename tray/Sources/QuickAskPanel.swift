@@ -73,6 +73,8 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     private(set) var bots: [TrayBot] = []
     private(set) var dispatchers: [TrayDispatcher] = []
     private var turnRunning = false
+    /// A target asked for before the picker had it (bots load asynchronously); applied by the next rebuild.
+    private var pendingTargetId: String?
     /// A follow-up was sent and no render has confirmed the real turn state yet.
     private var followUpPending = false
     private var preChatConstraints: [NSLayoutConstraint] = []
@@ -218,7 +220,8 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     }
 
     private func rebuildPicker() {
-        let previous = botPopup.selectedItem?.representedObject as? String
+        let previous = pendingTargetId ?? (botPopup.selectedItem?.representedObject as? String)
+        pendingTargetId = nil
         botPopup.removeAllItems()
         let entries = QuickAskTargets.items(
             bots: bots.map { (id: $0.id, title: $0.name) },
@@ -325,6 +328,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     }
 
     private func resetQuickAsk() {
+        pendingTargetId = nil
         chatAgentId = nil
         turnRunning = false
         followUpPending = false
@@ -359,9 +363,13 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         return nil
     }
 
-    /// Selects a picker target by its QuickAskTargets id; ignored when it isn't in the picker.
+    /// Selects a picker target by its QuickAskTargets id; when it isn't in the picker yet, the next rebuild selects it.
     func selectTarget(id: String) {
-        guard let index = botPopup.itemArray.firstIndex(where: { ($0.representedObject as? String) == id }) else { return }
+        guard let index = botPopup.itemArray.firstIndex(where: { ($0.representedObject as? String) == id }) else {
+            pendingTargetId = id
+            return
+        }
+        pendingTargetId = nil
         botPopup.selectItem(at: index)
         updateQuickControls()
     }
@@ -658,6 +666,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     }
 
     @objc private func botChanged() {
+        pendingTargetId = nil
         updateQuickControls()
     }
 

@@ -362,15 +362,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
         showQuickAsk()
     }
 
-    func menuControllerQuickAskDispatcher(_ agentId: String) {
-        if quickAskPanel.isQuickAskVisible, quickAskPanel.chatAgentId == agentId {
+    func menuControllerQuickAsk(targetId: String) {
+        if quickAskPanel.isQuickAskVisible, let chatId = quickAskPanel.chatAgentId,
+           QuickAskTargets.dispatcherId(chatId) == targetId {
             showQuickAsk()
             return
         }
         // Start a fresh Quick Ask session; any other chat lives on in Paseo.
         if quickAskPanel.isQuickAskVisible { quickAskPanel.close() }
         showQuickAsk()
-        quickAskPanel.selectTarget(id: QuickAskTargets.dispatcherId(agentId))
+        quickAskPanel.selectTarget(id: targetId)
     }
 
     /// Shows the Quick Ask panel. Does nothing when there is no target: no tray.json (paseo-bots) and no Flowly dispatchers.
