@@ -16,8 +16,7 @@ final class FakeSender {
 private func makeClient() -> (TimelineClient, FakeSender, errors: () -> [String]) {
     let sender = FakeSender()
     var errors: [String] = []
-    let client = TimelineClient(send: { sender.send($0) },
-                                subscriptions: TimelineSubscriptions(send: { sender.send($0) }))
+    let client = TimelineClient(send: { sender.send($0) })
     client.onError = { errors.append($0) }
     return (client, sender, { errors })
 }
@@ -96,8 +95,7 @@ func testResubscribeRefetchesAndResubscribes() {
     client.handle(type: "fetch_agent_timeline_response", payload: snapshotPayload(sender.fetches[0]))
     client.resubscribe()
     expect(sender.fetches.count == 2, "resubscribe refetches the tail")
-    expect(sender.messages("agent.timeline.set_subscription.request").count == 1,
-           "client resubscribe leaves the subscription to the shared owner")
+    expect(sender.messages("agent.timeline.set_subscription.request").count == 2, "resubscribe subscribes again")
     expect(sender.fetches[0]["requestId"] as? String != sender.fetches[1]["requestId"] as? String, "fresh requestId")
     client.handle(type: "fetch_agent_timeline_response", payload: snapshotPayload(sender.fetches[0]))
     expect(client.state.needsRefetch, "pre-reconnect response ignored")
@@ -133,7 +131,7 @@ func testNotConnectedReportsError() {
     let sent = client.sendFollowUp("x")
     expect(errors().count == before + 1, "follow-up while disconnected reports error")
     expect(!sent, "follow-up while disconnected returns false")
-    let idle = TimelineClient(send: { _ in true }, subscriptions: TimelineSubscriptions(send: { _ in true }))
+    let idle = TimelineClient(send: { _ in true })
     expect(!idle.sendFollowUp("x"), "follow-up while not watching returns false")
     let (live, _, _) = makeClient()
     live.watch(agentId: "a1")
@@ -158,7 +156,7 @@ func testStopWatchingUnsubscribes() {
     client.watch(agentId: "a1")
     client.stopWatching()
     let subs = sender.messages("agent.timeline.set_subscription.request")
-    expect(subs.last?["agentIds"] as? [String] == [], "stopWatching subscribes []")
+    expect(subs.count == 1, "stopWatching never subscribes []")
     expect(client.agentId == nil, "agentId cleared")
     client.handle(type: "agent_stream", payload: streamPayload(agentId: "a1", seq: 6, text: "x"))
     expect(client.state.buffered.isEmpty, "payloads after stopWatching ignored")

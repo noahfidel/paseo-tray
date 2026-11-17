@@ -10,6 +10,8 @@ enum QuickAskPanelRouter {
         var busy: Bool
         var isVisible: Bool
         var isKey: Bool
+        /// Pre-chat text typed in the input: never moved to another target by a retarget.
+        var hasDraft = false
     }
 
     enum Action: Equatable {
@@ -33,10 +35,13 @@ enum QuickAskPanelRouter {
         if let target, let owner = owner(of: target, panels: panels) {
             return forward(owner, .focus(owner))
         }
-        // Reuse a panel with no chat yet: the key one first, else the most recently opened.
-        let reusable = panels.indices.filter { panels[$0].isVisible && !panels[$0].busy }
+        // Reuse a panel with no chat yet: the key one first, else the most recently opened. With a
+        // target it gets retargeted, so a panel holding a draft is left alone.
+        let reusable = panels.indices.filter {
+            panels[$0].isVisible && !panels[$0].busy && (target == nil || !panels[$0].hasDraft)
+        }
         guard let index = reusable.first(where: { panels[$0].isKey }) ?? reusable.last else { return .open }
-        if target == nil || panels[index].targetId == target { return forward(index, .focus(index)) }
+        if target == nil { return forward(index, .focus(index)) }
         return forward(index, .retarget(index))
     }
 

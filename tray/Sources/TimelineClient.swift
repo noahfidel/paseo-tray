@@ -3,13 +3,14 @@ import Foundation
 /// Streams one agent's timeline over the daemon connection into a `TimelineState`.
 /// Foundation only: all I/O goes through the injected `send` (PaseoClient's
 /// session channel), and daemon messages come back through `handle`. Several clients can share
-/// one connection: the subscription goes through the shared `TimelineSubscriptions` (which also
-/// handles its response), and every other request and payload is matched by agent and request id.
+/// one connection: the tray is an owned-subscriptions client, so each
+/// `agent.timeline.set_subscription.request` makes a separate server subscription with its own
+/// `subscriptionId`. Each client holds one subscription for its agent and releases it
+/// (`subscription.release.request`) when it stops, re-watches or is freed; every request and
+/// payload is matched by agent, request id and subscription id.
 /// Main-thread only.
 final class TimelineClient {
     private let send: ([String: Any]) -> Bool
-    private let subscriptions: TimelineSubscriptions
-    private var subscriptionWatcher = 0
     private(set) var agentId: String?
     private(set) var state = TimelineState()
     var onChange: ((TimelineState) -> Void)?
@@ -20,6 +21,13 @@ final class TimelineClient {
     static let retryDelays: [TimeInterval] = [1, 5]
 
     private var fetchRequestId: String?
+    private var subscribeRequestId: String?
+    /// The server subscription this client holds (from the subscribe response).
+    private var subscriptionId: String?
+    /// Subscribe requests sent for an earlier watch: their late responses are released at once.
+    private var abandonedSubscribeRequestIds = Set<String>()
+    /// Subscriptions released on this socket: frames still in flight for them are dropped.
+    private var releasedSubscriptionIds = Set<String>()
     private var cancelRequestId: String?
     private var pendingMessageIds = Set<String>()
     private var retryCount = 0
@@ -30,16 +38,12 @@ final class TimelineClient {
     private var retryToken = 0
     private var activeTurnBehavior: String?
 
-    init(send: @escaping ([String: Any]) -> Bool, subscriptions: TimelineSubscriptions) {
+    init(send: @escaping ([String: Any]) -> Bool) {
         self.send = send
-        self.subscriptions = subscriptions
-        subscriptionWatcher = subscriptions.register(onError: { [weak self] error in
-            self?.onError?(error)
-        })
     }
 
     deinit {
-        subscriptions.unregister(subscriptionWatcher)
+        releaseSubscription()
     }
 
     // MARK: Commands
@@ -47,6 +51,7 @@ final class TimelineClient {
     /// `activeTurnBehavior` (e.g. "steer") rides along on follow-ups so a send never interrupts a
     /// running turn; nil leaves the key out and keeps the server default.
     func watch(agentId: String, activeTurnBehavior: String? = nil) {
+        releaseSubscription()
         self.agentId = agentId
         self.activeTurnBehavior = activeTurnBehavior
         state = TimelineState()
@@ -62,20 +67,22 @@ final class TimelineClient {
         cancelRequestId = nil
         pendingMessageIds = []
         invalidateRetry()
-        subscriptions.setAgent(nil, for: subscriptionWatcher)
+        releaseSubscription()
     }
 
-    /// After a reconnect: refetch the tail. The shared `TimelineSubscriptions.resubscribe()`
-    /// restores the subscription itself (once for all clients).
+    /// After a reconnect: the old socket's subscriptions died with it, so forget them (no
+    /// release), then refetch and subscribe again.
     func resubscribe() {
         guard agentId != nil else { return }
         // Frames arriving before the new snapshot must buffer, not apply.
         state.needsRefetch = true
         let lost = !pendingMessageIds.isEmpty
         pendingMessageIds = []
-        reportedDisconnect = false
-        invalidateRetry()
-        fetchTail()
+        subscriptionId = nil
+        subscribeRequestId = nil
+        abandonedSubscribeRequestIds = []
+        releasedSubscriptionIds = []
+        beginWatch()
         // A follow-up whose response never arrived may or may not have reached the agent; don't resend.
         if lost { onError?(L("Your last message may not have been sent", "你的上一条消息可能未发送")) }
     }
@@ -134,13 +141,27 @@ final class TimelineClient {
             TimelineReducer.applySnapshot(&state, payload: payload)
             changed()
         case "agent_stream":
-            guard matchesAgent(payload) else { return }
+            guard matchesAgent(payload), matchesSubscription(payload) else { return }
             TimelineReducer.applyStream(&state, payload: payload)
             changed()
         case "agent.timeline.replacement":
-            guard matchesAgent(payload) else { return }
+            guard matchesAgent(payload), matchesSubscription(payload) else { return }
             TimelineReducer.applyReplacement(&state, payload: payload)
             changed()
+        case "agent.timeline.set_subscription.response":
+            guard let requestId = payload["requestId"] as? String else { return }
+            let id = payload["subscriptionId"] as? String
+            if requestId == subscribeRequestId {
+                subscribeRequestId = nil
+                if let error = Self.errorText(payload) {
+                    onError?(error)
+                } else {
+                    subscriptionId = id
+                }
+            } else if abandonedSubscribeRequestIds.remove(requestId) != nil, let id {
+                // Answered after this client stopped or re-watched: nobody wants it.
+                release(id)
+            }
         case "send_agent_message_response":
             guard matchesAgent(payload),
                   let requestId = payload["requestId"] as? String,
@@ -161,6 +182,11 @@ final class TimelineClient {
             if requestId == fetchRequestId {
                 fetchRequestId = nil
                 fetchFailed(error)
+            } else if requestId == subscribeRequestId {
+                subscribeRequestId = nil
+                onError?(error)
+            } else if abandonedSubscribeRequestIds.remove(requestId) != nil {
+                break
             } else if requestId == cancelRequestId {
                 cancelRequestId = nil
                 onError?(error)
@@ -211,7 +237,52 @@ final class TimelineClient {
         reportedDisconnect = false
         invalidateRetry()
         fetchTail()
-        if let agentId, !subscriptions.setAgent(agentId, for: subscriptionWatcher) { notConnectedOnce() }
+        subscribe()
+    }
+
+    private func subscribe() {
+        guard let agentId else { return }
+        let requestId = Self.newId("sub")
+        subscribeRequestId = requestId
+        if !send([
+            "type": "agent.timeline.set_subscription.request",
+            "agentIds": [agentId],
+            "requestId": requestId,
+        ]) {
+            subscribeRequestId = nil
+            notConnectedOnce()
+        }
+    }
+
+    /// Gives up this client's subscription: releases the one it holds and marks a pending
+    /// subscribe as abandoned (its response is released when it arrives). Never sends `[]`.
+    private func releaseSubscription() {
+        if let subscriptionId {
+            self.subscriptionId = nil
+            release(subscriptionId)
+        }
+        if let subscribeRequestId {
+            self.subscribeRequestId = nil
+            abandonedSubscribeRequestIds.insert(subscribeRequestId)
+        }
+    }
+
+    /// A failed send needs no retry: the socket is gone and its subscriptions with it.
+    private func release(_ id: String) {
+        releasedSubscriptionIds.insert(id)
+        _ = send([
+            "type": "subscription.release.request",
+            "subscriptionId": id,
+            "requestId": Self.newId("release"),
+        ])
+    }
+
+    /// Frames tagged with a subscription id must be this client's: once it knows its id, only
+    /// that one; before, anything but a subscription it already released.
+    private func matchesSubscription(_ payload: [String: Any]) -> Bool {
+        guard let id = payload["subscriptionId"] as? String else { return true }
+        if let subscriptionId { return id == subscriptionId }
+        return !releasedSubscriptionIds.contains(id)
     }
 
     /// Supersedes any fetch in flight (its response will be ignored).

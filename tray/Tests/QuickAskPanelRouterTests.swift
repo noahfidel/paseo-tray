@@ -2,8 +2,8 @@ import Foundation
 
 func runQuickAskPanelRouterTests() {
     typealias R = QuickAskPanelRouter
-    func p(_ target: String?, busy: Bool = false, visible: Bool = true, key: Bool = false) -> R.Panel {
-        R.Panel(targetId: target, busy: busy, isVisible: visible, isKey: key)
+    func p(_ target: String?, busy: Bool = false, visible: Bool = true, key: Bool = false, draft: Bool = false) -> R.Panel {
+        R.Panel(targetId: target, busy: busy, isVisible: visible, isKey: key, hasDraft: draft)
     }
 
     // Open-or-focus
@@ -38,6 +38,16 @@ func runQuickAskPanelRouterTests() {
            "router: invisible panels are ignored")
     expect(R.route(panels: [p(nil)], target: "bot:b", toggle: false) == .retarget(0),
            "router: a still-empty pre-chat panel is retargeted")
+
+    // Drafts
+    expect(R.route(panels: [p("bot:c", draft: true)], target: "bot:b", toggle: false) == .open,
+           "router: a pre-chat panel with a draft is not retargeted; a new panel opens")
+    expect(R.route(panels: [p("bot:c"), p("bot:d", key: true, draft: true)], target: "bot:b", toggle: false) == .retarget(0),
+           "router: an empty pre-chat panel is reused over a key one with a draft")
+    expect(R.route(panels: [p("bot:b", draft: true)], target: "bot:b", toggle: false) == .focus(0),
+           "router: a draft panel on the target itself is focused")
+    expect(R.route(panels: [p("bot:c", draft: true)], target: nil, toggle: false) == .focus(0),
+           "router: nil target still focuses a draft panel (nothing moves)")
 
     // No resolvable target
     expect(R.route(panels: [p("bot:a", busy: true), p("bot:c")], target: nil, toggle: false) == .focus(1),

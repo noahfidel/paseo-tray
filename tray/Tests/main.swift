@@ -29,7 +29,7 @@ runEditMenuSpecTests()
 runDispatcherStoreTests()
 runQuickAskTargetsTests()
 runQuickAskMenuTests()
-runTimelineSubscriptionsTests()
+runTimelineSubscriptionTests()
 runQuickAskPanelRouterTests()
 
 if failureCount == 0 {

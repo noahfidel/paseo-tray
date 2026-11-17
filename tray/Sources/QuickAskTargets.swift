@@ -67,11 +67,13 @@ enum QuickAskTargets {
 
     /// Which picker entry to select after a rebuild. `explicit` marks a choice made by the user or
     /// the menu (kept while present); otherwise the first entry is a default that a later rebuild
-    /// may replace. A pending target not in `ids` yet stays pending.
+    /// may replace. A pending target not in `ids` yet stays pending while it may still arrive
+    /// (`pendingMayArrive`: the bots fetch hasn't finished); after that it is dropped.
     static func selection(ids: [String], current: String?, currentIsExplicit: Bool,
-                          pending: String?) -> (id: String?, explicit: Bool, pendingCleared: Bool) {
+                          pending: String?, pendingMayArrive: Bool = true) -> (id: String?, explicit: Bool, pendingCleared: Bool) {
         if let pending, ids.contains(pending) { return (pending, true, true) }
-        if currentIsExplicit, let current, ids.contains(current) { return (current, true, false) }
-        return (ids.first, false, false)
+        let dropPending = pending != nil && !pendingMayArrive
+        if currentIsExplicit, let current, ids.contains(current) { return (current, true, dropPending) }
+        return (ids.first, false, dropPending)
     }
 }

@@ -9,10 +9,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
     private let botsClient = BotsClient()
     /// Open Quick Ask panels, one per target, oldest first (each with its own timeline client).
     private var quickAskWindows: [QuickAskWindow] = []
-    /// The one timeline subscription all Quick Ask panels share on the daemon connection.
-    private lazy var timelineSubscriptions = TimelineSubscriptions(send: { [weak self] message in
-        self?.client?.sendSessionMessage(message) ?? false
-    })
     private var promptPanelCreated = false
     /// "New chat with prompt…" has its own panel so it never disturbs a Quick Ask panel.
     private lazy var promptPanel: QuickAskPanel = {
@@ -177,10 +173,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             refreshMenu()
             if reconnected {
                 for window in quickAskWindows { window.timeline.resubscribe() }
-                timelineSubscriptions.resubscribe()
             }
         case .timelineMessage(let type, let payload):
-            timelineSubscriptions.handle(type: type, payload: payload)
             for window in quickAskWindows { window.timeline.handle(type: type, payload: payload) }
         case .snapshot(let entries, let hasMore, let serverId):
             store.replace(entries: entries, hasMore: hasMore)
@@ -354,7 +348,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
                 targetId: $0.panel.targetId,
                 busy: $0.panel.chatAgentId != nil || $0.panel.isSending,
                 isVisible: $0.panel.isQuickAskVisible,
-                isKey: $0.panel.isKeyWindow)
+                isKey: $0.panel.isKeyWindow,
+                hasDraft: $0.panel.hasDraft)
         }
     }
 
@@ -371,6 +366,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             focusQuickAsk(quickAskWindows[index])
         case .retarget(let index):
             let window = quickAskWindows[index]
+            // A dispatcher that appeared since the panel opened must be in the picker to be selected.
+            refreshQuickAskDispatchers(window)
             if let targetId { window.panel.selectTarget(id: targetId) }
             focusQuickAsk(window)
         case .open:
@@ -400,13 +397,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
         let panel = QuickAskPanel()
         let timeline = TimelineClient(send: { [weak self] message in
             self?.client?.sendSessionMessage(message) ?? false
-        }, subscriptions: timelineSubscriptions)
+        })
         let window = QuickAskWindow(panel: panel, timeline: timeline)
         panel.avatarProvider = { [weak self] bot in
             self?.botsClient.avatarImage(for: bot) ?? NSImage()
         }
         panel.onAsk = { [weak self, weak window] target, prompt in
             guard let self, let window else { return }
+            // The picker can sit on another panel's target (a default selection, or a pending
+            // target that never arrived): that panel's chat wins, bring it forward instead.
+            if self.focusOwner(of: target, otherThan: window) { return }
             switch target {
             case .bot(let bot): self.askBot(bot, prompt: prompt, in: window)
             case .dispatcher(let dispatcher): self.askDispatcher(dispatcher, prompt: prompt, in: window)
@@ -429,7 +429,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
         }
         panel.onClose = { [weak self, weak window] in
             guard let window else { return }
-            // Only this panel's watch ends; the shared subscription keeps the other panels' agents.
+            // Only this panel's watch ends (its own subscription is released); the others keep theirs.
             window.timeline.stopWatching()
             // Drop it after close() returns, so the panel isn't freed while it is still closing.
             DispatchQueue.main.async {
@@ -447,6 +447,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             window.panel.showError(message)
         }
         return window
+    }
+
+    /// When another open panel owns `target`, brings it forward and returns true.
+    private func focusOwner(of target: QuickAskTarget, otherThan window: QuickAskWindow) -> Bool {
+        let targetId: String
+        switch target {
+        case .bot(let bot): targetId = QuickAskTargets.botId(bot.id)
+        case .dispatcher(let dispatcher): targetId = QuickAskTargets.dispatcherId(dispatcher.agentId)
+        }
+        guard let index = quickAskWindows.firstIndex(where: { $0 === window }),
+              let owner = QuickAskPanelRouter.owner(of: targetId, panels: panelStates(), excluding: index)
+        else { return false }
+        focusQuickAsk(quickAskWindows[owner])
+        return true
     }
 
     /// A pick in a panel's picker: when another open panel already has that target, bring that

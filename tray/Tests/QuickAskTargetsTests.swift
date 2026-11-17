@@ -63,6 +63,18 @@ func runQuickAskTargetsTests() {
     let sd = Q.selection(ids: ["bot:b"], current: "dispatcher:x1", currentIsExplicit: true, pending: nil)
     expect(sd.id == "bot:b" && !sd.explicit, "selection: vanished explicit choice falls back to first, defaulted")
     expect(Q.selection(ids: [], current: nil, currentIsExplicit: false, pending: nil).id == nil, "selection: nothing to select")
+    let gone = Q.selection(ids: lateIds, current: "dispatcher:x1", currentIsExplicit: false, pending: "bot:deleted",
+                           pendingMayArrive: false)
+    expect(gone.id == "bot:b" && !gone.explicit && gone.pendingCleared,
+           "selection: pending dropped once bots settled without it; default shown")
+    let goneExplicit = Q.selection(ids: lateIds, current: "dispatcher:x1", currentIsExplicit: true, pending: "bot:deleted",
+                                   pendingMayArrive: false)
+    expect(goneExplicit.id == "dispatcher:x1" && goneExplicit.explicit && goneExplicit.pendingCleared,
+           "selection: pending dropped, explicit choice kept")
+    let arrived = Q.selection(ids: lateIds, current: nil, currentIsExplicit: false, pending: "bot:b", pendingMayArrive: false)
+    expect(arrived.id == "bot:b" && arrived.pendingCleared, "selection: pending present after settle is selected")
+    expect(!Q.selection(ids: lateIds, current: nil, currentIsExplicit: false, pending: nil, pendingMayArrive: false).pendingCleared,
+           "selection: no pending, nothing cleared")
 
     expect(QuickAskTargets.dispatcherId("a1") == "dispatcher:a1"
            && QuickAskTargets.dispatcherId("a1").dropFirst("dispatcher:".count) == "a1",

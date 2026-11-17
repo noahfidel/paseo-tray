@@ -84,6 +84,8 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     private let quickSendButton = NSButton(title: "", target: nil, action: nil)
     private let stopButton = NSButton(title: "", target: nil, action: nil)
     private(set) var bots: [TrayBot] = []
+    /// The bots fetch finished (loaded or failed): a pending target missing by now never arrives.
+    private var botsSettled = false
     private(set) var dispatchers: [TrayDispatcher] = []
     private var turnRunning = false
     /// A target asked for before the picker had it (bots load asynchronously); applied by the next rebuild.
@@ -231,6 +233,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     /// Fills the bot part of the picker (API order; recents decide the display order).
     func setBots(_ bots: [TrayBot]) {
         self.bots = bots
+        botsSettled = true
         rebuildPicker()
     }
 
@@ -272,13 +275,16 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
             }
             let ids = botPopup.itemArray.compactMap { $0.representedObject as? String }
             let choice = QuickAskTargets.selection(ids: ids, current: previous,
-                                                   currentIsExplicit: selectionIsExplicit, pending: pendingTargetId)
+                                                   currentIsExplicit: selectionIsExplicit, pending: pendingTargetId,
+                                                   pendingMayArrive: !botsSettled)
             if let id = choice.id, let index = botPopup.itemArray.firstIndex(where: { ($0.representedObject as? String) == id }) {
                 botPopup.selectItem(at: index)
             }
             selectionIsExplicit = choice.explicit
             if choice.pendingCleared { pendingTargetId = nil }
         }
+        // Nothing to pick and the bots fetch is over: a pending target isn't coming.
+        if entries.isEmpty, botsSettled { pendingTargetId = nil }
         selectedTargetId = botPopup.selectedItem?.representedObject as? String
         updateQuickControls()
     }
@@ -364,6 +370,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         turnRunning = false
         followUpPending = false
         bots = []
+        botsSettled = false
         dispatchers = []
         botPopup.removeAllItems()
         botPopup.addItem(withTitle: L("Loading bots…", "正在加载机器人…"))
@@ -385,6 +392,11 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         updateQuickControls()
     }
 
+    /// Text typed before a chat started (a retarget would move it to another target).
+    var hasDraft: Bool {
+        chatAgentId == nil && !inputTextView.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var selectedTarget: QuickAskTarget? {
         guard let id = botPopup.selectedItem?.representedObject as? String else { return nil }
         if let bot = bots.first(where: { QuickAskTargets.botId($0.id) == id }) { return .bot(bot) }
@@ -397,7 +409,8 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     /// Selects a picker target by its QuickAskTargets id; when it isn't in the picker yet, the next rebuild selects it.
     func selectTarget(id: String) {
         guard let index = botPopup.itemArray.firstIndex(where: { ($0.representedObject as? String) == id }) else {
-            pendingTargetId = id
+            // Wait for it only while the bots are still loading; after that it isn't coming.
+            if !botsSettled { pendingTargetId = id }
             return
         }
         pendingTargetId = nil
