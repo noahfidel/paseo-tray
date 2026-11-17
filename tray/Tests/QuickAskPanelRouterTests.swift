@@ -49,6 +49,20 @@ func runQuickAskPanelRouterTests() {
     expect(R.route(panels: [p("bot:c", draft: true)], target: nil, toggle: false) == .focus(0),
            "router: nil target still focuses a draft panel (nothing moves)")
 
+    // Hotkey on a key pre-chat panel
+    expect(R.route(panels: [p("bot:c", key: true, draft: true)], target: "bot:b", toggle: true) == .close(0),
+           "router: hotkey closes a key pre-chat panel with a draft")
+    expect(R.route(panels: [p("bot:a", busy: true), p("bot:c", key: true)], target: "bot:b", toggle: true) == .close(1),
+           "router: hotkey closes a key pre-chat panel without a draft")
+    expect(R.route(panels: [p("bot:c", key: true, draft: true)], target: "bot:b", toggle: false) == .open,
+           "router: the menu still opens a new panel past a key draft panel")
+    expect(R.route(panels: [p("bot:b", busy: true), p("bot:c", key: true)], target: "bot:b", toggle: true) == .focus(0),
+           "router: hotkey focuses the target's owner even when a pre-chat panel is key")
+    expect(R.route(panels: [p("bot:b", busy: true, key: true), p("bot:c")], target: "bot:b", toggle: true) == .close(0),
+           "router: hotkey still closes a key panel that owns the target")
+    expect(R.route(panels: [p("bot:c", busy: true, key: true)], target: "bot:b", toggle: true) == .open,
+           "router: hotkey never closes a key in-chat panel on another target")
+
     // No resolvable target
     expect(R.route(panels: [p("bot:a", busy: true), p("bot:c")], target: nil, toggle: false) == .focus(1),
            "router: nil target focuses a pre-chat panel")

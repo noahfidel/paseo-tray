@@ -127,7 +127,48 @@ final class TimelineClient {
 
     // MARK: Daemon messages
 
-    func handle(type: String, payload: [String: Any]) {
+    /// Returns true when this client claimed a subscribe response (its current or an abandoned
+    /// request); see `releaseUnclaimedSubscription` for the ones nobody claims.
+    @discardableResult
+    func handle(type: String, payload: [String: Any]) -> Bool {
+        if type == "agent.timeline.set_subscription.response" { return handleSubscribeResponse(payload) }
+        apply(type: type, payload: payload)
+        return false
+    }
+
+    /// A subscribe response from this connection that no live client claimed (its client was freed
+    /// before the answer came): release the subscription so it doesn't outlive the panel.
+    /// Returns true when a release was sent.
+    @discardableResult
+    static func releaseUnclaimedSubscription(type: String, payload: [String: Any], claimed: Bool,
+                                             send: ([String: Any]) -> Bool) -> Bool {
+        guard !claimed, type == "agent.timeline.set_subscription.response",
+              let requestId = payload["requestId"] as? String, requestId.hasPrefix("tl-sub-"),
+              let id = payload["subscriptionId"] as? String else { return false }
+        return send(releaseRequest(id))
+    }
+
+    private func handleSubscribeResponse(_ payload: [String: Any]) -> Bool {
+        guard let requestId = payload["requestId"] as? String else { return false }
+        let id = payload["subscriptionId"] as? String
+        if requestId == subscribeRequestId {
+            subscribeRequestId = nil
+            if let error = Self.errorText(payload) {
+                onError?(error)
+            } else {
+                subscriptionId = id
+            }
+            return true
+        }
+        if abandonedSubscribeRequestIds.remove(requestId) != nil {
+            // Answered after this client stopped or re-watched: nobody wants it.
+            if let id { release(id) }
+            return true
+        }
+        return false
+    }
+
+    private func apply(type: String, payload: [String: Any]) {
         switch type {
         case "fetch_agent_timeline_response":
             guard matchesAgent(payload),
@@ -148,20 +189,6 @@ final class TimelineClient {
             guard matchesAgent(payload), matchesSubscription(payload) else { return }
             TimelineReducer.applyReplacement(&state, payload: payload)
             changed()
-        case "agent.timeline.set_subscription.response":
-            guard let requestId = payload["requestId"] as? String else { return }
-            let id = payload["subscriptionId"] as? String
-            if requestId == subscribeRequestId {
-                subscribeRequestId = nil
-                if let error = Self.errorText(payload) {
-                    onError?(error)
-                } else {
-                    subscriptionId = id
-                }
-            } else if abandonedSubscribeRequestIds.remove(requestId) != nil, let id {
-                // Answered after this client stopped or re-watched: nobody wants it.
-                release(id)
-            }
         case "send_agent_message_response":
             guard matchesAgent(payload),
                   let requestId = payload["requestId"] as? String,
@@ -270,11 +297,15 @@ final class TimelineClient {
     /// A failed send needs no retry: the socket is gone and its subscriptions with it.
     private func release(_ id: String) {
         releasedSubscriptionIds.insert(id)
-        _ = send([
+        _ = send(Self.releaseRequest(id))
+    }
+
+    private static func releaseRequest(_ subscriptionId: String) -> [String: Any] {
+        [
             "type": "subscription.release.request",
-            "subscriptionId": id,
-            "requestId": Self.newId("release"),
-        ])
+            "subscriptionId": subscriptionId,
+            "requestId": newId("release"),
+        ]
     }
 
     /// Frames tagged with a subscription id must be this client's: once it knows its id, only

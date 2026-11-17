@@ -202,7 +202,10 @@ final class TimelineWatch: PaseoClientDelegate {
             }
             connected = nowConnected
         case .timelineMessage(let type, let payload):
-            timeline?.handle(type: type, payload: payload)
+            let claimed = timeline?.handle(type: type, payload: payload) ?? false
+            TimelineClient.releaseUnclaimedSubscription(type: type, payload: payload, claimed: claimed) { [weak self] in
+                self?.client?.sendSessionMessage($0) ?? false
+            }
         default:
             break
         }

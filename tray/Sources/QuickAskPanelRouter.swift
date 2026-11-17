@@ -35,6 +35,10 @@ enum QuickAskPanelRouter {
         if let target, let owner = owner(of: target, panels: panels) {
             return forward(owner, .focus(owner))
         }
+        // The hotkey closes a key pre-chat panel (draft or not) rather than retargeting it.
+        if toggle, let key = panels.indices.first(where: { panels[$0].isVisible && panels[$0].isKey && !panels[$0].busy }) {
+            return .close(key)
+        }
         // Reuse a panel with no chat yet: the key one first, else the most recently opened. With a
         // target it gets retargeted, so a panel holding a draft is left alone.
         let reusable = panels.indices.filter {

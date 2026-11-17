@@ -180,7 +180,40 @@ func testTwoTimelineClientsStayIndependent() {
     expect(changesB == 2, "two clients: B keeps streaming after A stops")
 }
 
+func testUnclaimedSubscribeResponseIsReleased() {
+    let sender = FakeSender()
+    let send: ([String: Any]) -> Bool = { sender.send($0) }
+    var client: TimelineClient? = TimelineClient(send: send)
+    client?.watch(agentId: "a1")
+    let sub = sender.messages(subType).last!
+    client = nil
+    expect(sender.messages(releaseType).isEmpty, "unclaimed: a client freed before its answer has nothing to release")
+    let response: [String: Any] = ["agentIds": ["a1"], "requestId": sub["requestId"] as Any, "subscriptionId": "orphan"]
+    let claimed = client?.handle(type: "agent.timeline.set_subscription.response", payload: response) ?? false
+    expect(TimelineClient.releaseUnclaimedSubscription(type: "agent.timeline.set_subscription.response",
+                                                       payload: response, claimed: claimed, send: send),
+           "unclaimed: the connection releases a response nobody claimed")
+    expect(sender.messages(releaseType).map { $0["subscriptionId"] as? String } == ["orphan"], "unclaimed: release names its id")
+
+    let live = TimelineClient(send: send)
+    live.watch(agentId: "b1")
+    let liveSub = sender.messages(subType).last!
+    let liveResponse: [String: Any] = ["agentIds": ["b1"], "requestId": liveSub["requestId"] as Any, "subscriptionId": "kept"]
+    let liveClaimed = live.handle(type: "agent.timeline.set_subscription.response", payload: liveResponse)
+    expect(liveClaimed, "unclaimed: a client claims its own response")
+    expect(!TimelineClient.releaseUnclaimedSubscription(type: "agent.timeline.set_subscription.response",
+                                                        payload: liveResponse, claimed: liveClaimed, send: send),
+           "unclaimed: a claimed response is not released")
+    expect(sender.messages(releaseType).count == 1, "unclaimed: nothing extra sent")
+    expect(!TimelineClient.releaseUnclaimedSubscription(type: "agent.timeline.set_subscription.response",
+                                                        payload: ["requestId": "other-1", "subscriptionId": "x"],
+                                                        claimed: false, send: send),
+           "unclaimed: a response for another component's request is left alone")
+    expect(!live.handle(type: "agent_stream", payload: stream("b1", seq: 6, text: "x")), "unclaimed: other messages aren't claims")
+}
+
 func runTimelineSubscriptionTests() {
+    testUnclaimedSubscribeResponseIsReleased()
     testSubscribeResponseRecordsIdAndStopReleasesIt()
     testRewatchReleasesOldSubscription()
     testLateSubscribeResponseIsReleased()

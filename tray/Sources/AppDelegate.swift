@@ -175,7 +175,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
                 for window in quickAskWindows { window.timeline.resubscribe() }
             }
         case .timelineMessage(let type, let payload):
-            for window in quickAskWindows { window.timeline.handle(type: type, payload: payload) }
+            var claimed = false
+            for window in quickAskWindows where window.timeline.handle(type: type, payload: payload) { claimed = true }
+            // A panel closed before its subscribe answer came: release that subscription here.
+            TimelineClient.releaseUnclaimedSubscription(type: type, payload: payload, claimed: claimed) { [weak self] in
+                self?.client?.sendSessionMessage($0) ?? false
+            }
         case .snapshot(let entries, let hasMore, let serverId):
             store.replace(entries: entries, hasMore: hasMore)
             self.serverId = serverId
@@ -365,11 +370,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
         case .focus(let index):
             focusQuickAsk(quickAskWindows[index])
         case .retarget(let index):
-            let window = quickAskWindows[index]
-            // A dispatcher that appeared since the panel opened must be in the picker to be selected.
-            refreshQuickAskDispatchers(window)
-            if let targetId { window.panel.selectTarget(id: targetId) }
-            focusQuickAsk(window)
+            focusQuickAsk(quickAskWindows[index], selecting: targetId)
         case .open:
             let window = makeQuickAskWindow()
             let cascadeFrom = quickAskWindows.last?.panel.frame
@@ -382,15 +383,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
         }
     }
 
-    /// Brings an open panel forward as it is (keeps a chat in progress).
-    private func focusQuickAsk(_ window: QuickAskWindow) {
+    /// Brings an open panel forward as it is (keeps a chat in progress); `targetId` retargets a
+    /// pre-chat panel's picker.
+    private func focusQuickAsk(_ window: QuickAskWindow, selecting targetId: String? = nil) {
         let panel = window.panel
         panel.present(mode: .quickAsk)
+        // Dispatchers that appeared since the panel opened must be in the picker before selecting.
         if panel.chatAgentId == nil { refreshQuickAskDispatchers(window) }
-        // An earlier fetch failed: try again instead of leaving an empty picker.
+        // An earlier fetch failed: try again instead of leaving an empty picker. Started before
+        // selecting, so a bot target stays pending until this refetch ends.
         if panel.bots.isEmpty, panel.chatAgentId == nil {
             loadQuickAskBots(window)
         }
+        if let targetId, panel.chatAgentId == nil { panel.selectTarget(id: targetId) }
     }
 
     private func makeQuickAskWindow() -> QuickAskWindow {
@@ -483,6 +488,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
 
     private func loadQuickAskBots(_ window: QuickAskWindow) {
         let panel = window.panel
+        // A target asked for while this fetch runs must wait for it, even after an earlier failure.
+        panel.botsFetchStarted()
         let session = panel.session
         botsClient.fetchBots { [weak panel] result in
             guard let panel, panel.session == session else { return }

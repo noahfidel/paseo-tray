@@ -231,6 +231,11 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     // MARK: - Quick Ask
 
     /// Fills the bot part of the picker (API order; recents decide the display order).
+    /// A bots fetch (or refetch after a failure) began: targets asked for now stay pending until it ends.
+    func botsFetchStarted() {
+        botsSettled = false
+    }
+
     func setBots(_ bots: [TrayBot]) {
         self.bots = bots
         botsSettled = true
