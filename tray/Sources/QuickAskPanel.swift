@@ -427,10 +427,9 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     /// Leaves the current chat (or draft) for a fresh one without closing the panel. Nothing is
     /// cancelled or deleted in Paseo: a running turn keeps running, the panel just stops watching.
     func startNewChat() {
-        guard case .quickAsk? = mode else { return }
-        // Stale in-flight results belong to the old chat now.
-        session += 1
-        isSending = false
+        // Never while the first question is sending, so no send result can land in the fresh panel.
+        // `session` stays: bumping it would drop an in-flight bots fetch and strand the picker.
+        guard isNewChatAvailable else { return }
         let target = QuickAskNewChat.preselectTarget(chatTargetId: chatTargetId, selectedTargetId: selectedTargetId)
         let wasInChat = chatAgentId != nil
         resetQuickAskUI()
@@ -796,7 +795,6 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     }
 
     @objc private func newChatTapped() {
-        guard isNewChatAvailable else { return }
         startNewChat()
     }
 
