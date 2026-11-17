@@ -220,8 +220,8 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     }
 
     private func rebuildPicker() {
+        // A pending target survives rebuilds that don't contain it yet (dispatchers arrive before bots).
         let previous = pendingTargetId ?? (botPopup.selectedItem?.representedObject as? String)
-        pendingTargetId = nil
         botPopup.removeAllItems()
         let entries = QuickAskTargets.items(
             bots: bots.map { (id: $0.id, title: $0.name) },
@@ -250,6 +250,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
             }
             if let previous, let index = botPopup.itemArray.firstIndex(where: { ($0.representedObject as? String) == previous }) {
                 botPopup.selectItem(at: index)
+                pendingTargetId = nil
             } else if let first = botPopup.itemArray.firstIndex(where: { $0.representedObject != nil }) {
                 botPopup.selectItem(at: first)
             }
