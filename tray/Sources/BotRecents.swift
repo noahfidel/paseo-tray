@@ -1,7 +1,6 @@
 import Foundation
 
-/// Quick Ask's recents: bot ids and dispatcher keys, last used first. Foundation only;
-/// the `[TrayBot]` overload lives next to the panel.
+/// Quick Ask's recents: bot ids and dispatcher keys, last used first. Foundation only.
 enum BotRecents {
     static let defaultsKey = "QuickAskRecentBots"
     static let limit = 50

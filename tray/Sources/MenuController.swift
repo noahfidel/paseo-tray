@@ -160,6 +160,8 @@ final class MenuController: NSObject, NSMenuDelegate {
         guard menu === self.menu else { return }
         menuIsOpen = true
         delegate?.menuControllerWillOpen()
+        // Recents may have changed since the last build (a Quick Ask was sent): re-sort before showing.
+        populateQuickAskSubmenu()
         fetchBots()
     }
 
