@@ -489,10 +489,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
     private func loadQuickAskBots(_ window: QuickAskWindow) {
         let panel = window.panel
         // A target asked for while this fetch runs must wait for it, even after an earlier failure.
-        panel.botsFetchStarted()
+        // One fetch per panel at a time; only the latest may fill the picker or show an error.
+        guard let token = panel.botsFetchStarted() else { return }
         let session = panel.session
         botsClient.fetchBots { [weak panel] result in
-            guard let panel, panel.session == session else { return }
+            guard let panel, panel.session == session, panel.botsFetchFinished(token) else { return }
             switch result {
             case .loaded(let bots):
                 panel.clearError()

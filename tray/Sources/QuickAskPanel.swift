@@ -86,6 +86,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     private(set) var bots: [TrayBot] = []
     /// The bots fetch finished (loaded or failed): a pending target missing by now never arrives.
     private var botsSettled = false
+    private var botsFetch = BotsFetchGate()
     private(set) var dispatchers: [TrayDispatcher] = []
     private var turnRunning = false
     /// A target asked for before the picker had it (bots load asynchronously); applied by the next rebuild.
@@ -134,6 +135,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     override func close() {
         super.close()
         session += 1
+        botsFetch.reset()
         isSending = false
         chatAgentId = nil
         chatTargetId = nil
@@ -230,12 +232,22 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
 
     // MARK: - Quick Ask
 
-    /// Fills the bot part of the picker (API order; recents decide the display order).
-    /// A bots fetch (or refetch after a failure) began: targets asked for now stay pending until it ends.
-    func botsFetchStarted() {
+    /// Starts a bots fetch (or a refetch after a failure): targets asked for now stay pending until
+    /// it ends. Returns its token, or nil when a fetch is already running in this panel (that one
+    /// will settle the picker).
+    func botsFetchStarted() -> Int? {
+        guard let token = botsFetch.start() else { return nil }
         botsSettled = false
+        return token
     }
 
+    /// The fetch with `token` finished: true when it is still the latest one, so its result may be
+    /// applied (`setBots`, `showError`); a stale result must be dropped.
+    func botsFetchFinished(_ token: Int) -> Bool {
+        botsFetch.finish(token)
+    }
+
+    /// Fills the bot part of the picker (API order; recents decide the display order).
     func setBots(_ bots: [TrayBot]) {
         self.bots = bots
         botsSettled = true
@@ -376,6 +388,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         followUpPending = false
         bots = []
         botsSettled = false
+        botsFetch.reset()
         dispatchers = []
         botPopup.removeAllItems()
         botPopup.addItem(withTitle: L("Loading bots…", "正在加载机器人…"))
