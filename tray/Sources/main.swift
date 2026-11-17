@@ -135,6 +135,7 @@ final class TimelineWatch: PaseoClientDelegate {
     private let agentId: String
     private var client: PaseoClient?
     private var timeline: TimelineClient?
+    private var subscriptions: TimelineSubscriptions?
     private var printed: [String: ChatRow] = [:]
     private var lastTurn: TurnState?
     private var connected = false
@@ -173,7 +174,10 @@ final class TimelineWatch: PaseoClientDelegate {
     }
 
     func start(seconds: Double) {
-        let timeline = TimelineClient(send: { [weak self] in self?.client?.sendSessionMessage($0) ?? false })
+        let subscriptions = TimelineSubscriptions(send: { [weak self] in self?.client?.sendSessionMessage($0) ?? false })
+        self.subscriptions = subscriptions
+        let timeline = TimelineClient(send: { [weak self] in self?.client?.sendSessionMessage($0) ?? false },
+                                      subscriptions: subscriptions)
         timeline.onChange = { [weak self] in self?.render($0) }
         timeline.onError = { message in
             fputs("error: \(message)\n", stderr)
@@ -198,10 +202,14 @@ final class TimelineWatch: PaseoClientDelegate {
             lastDetail = status.detail
             let nowConnected = status.phase == .connected
             if nowConnected && !connected {
-                if watching { timeline?.resubscribe() } else { watching = true; timeline?.watch(agentId: agentId) }
+                if watching {
+                    timeline?.resubscribe()
+                    subscriptions?.resubscribe()
+                } else { watching = true; timeline?.watch(agentId: agentId) }
             }
             connected = nowConnected
         case .timelineMessage(let type, let payload):
+            subscriptions?.handle(type: type, payload: payload)
             timeline?.handle(type: type, payload: payload)
         default:
             break

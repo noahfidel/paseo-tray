@@ -2,10 +2,14 @@ import Foundation
 
 /// Streams one agent's timeline over the daemon connection into a `TimelineState`.
 /// Foundation only: all I/O goes through the injected `send` (PaseoClient's
-/// session channel), and daemon messages come back through `handle`.
+/// session channel), and daemon messages come back through `handle`. Several clients can share
+/// one connection: the subscription goes through the shared `TimelineSubscriptions` (which also
+/// handles its response), and every other request and payload is matched by agent and request id.
 /// Main-thread only.
 final class TimelineClient {
     private let send: ([String: Any]) -> Bool
+    private let subscriptions: TimelineSubscriptions
+    private var subscriptionWatcher = 0
     private(set) var agentId: String?
     private(set) var state = TimelineState()
     var onChange: ((TimelineState) -> Void)?
@@ -16,7 +20,6 @@ final class TimelineClient {
     static let retryDelays: [TimeInterval] = [1, 5]
 
     private var fetchRequestId: String?
-    private var subscribeRequestId: String?
     private var cancelRequestId: String?
     private var pendingMessageIds = Set<String>()
     private var retryCount = 0
@@ -27,8 +30,16 @@ final class TimelineClient {
     private var retryToken = 0
     private var activeTurnBehavior: String?
 
-    init(send: @escaping ([String: Any]) -> Bool) {
+    init(send: @escaping ([String: Any]) -> Bool, subscriptions: TimelineSubscriptions) {
         self.send = send
+        self.subscriptions = subscriptions
+        subscriptionWatcher = subscriptions.register(onError: { [weak self] error in
+            self?.onError?(error)
+        })
+    }
+
+    deinit {
+        subscriptions.unregister(subscriptionWatcher)
     }
 
     // MARK: Commands
@@ -51,17 +62,20 @@ final class TimelineClient {
         cancelRequestId = nil
         pendingMessageIds = []
         invalidateRetry()
-        subscribe([], reportFailure: false)
+        subscriptions.setAgent(nil, for: subscriptionWatcher)
     }
 
-    /// After a reconnect: subscriptions are per-socket, so refetch and subscribe again.
+    /// After a reconnect: refetch the tail. The shared `TimelineSubscriptions.resubscribe()`
+    /// restores the subscription itself (once for all clients).
     func resubscribe() {
         guard agentId != nil else { return }
         // Frames arriving before the new snapshot must buffer, not apply.
         state.needsRefetch = true
         let lost = !pendingMessageIds.isEmpty
         pendingMessageIds = []
-        beginWatch()
+        reportedDisconnect = false
+        invalidateRetry()
+        fetchTail()
         // A follow-up whose response never arrived may or may not have reached the agent; don't resend.
         if lost { onError?(L("Your last message may not have been sent", "你的上一条消息可能未发送")) }
     }
@@ -127,10 +141,6 @@ final class TimelineClient {
             guard matchesAgent(payload) else { return }
             TimelineReducer.applyReplacement(&state, payload: payload)
             changed()
-        case "agent.timeline.set_subscription.response":
-            guard let requestId = payload["requestId"] as? String, requestId == subscribeRequestId else { return }
-            subscribeRequestId = nil
-            if let error = Self.errorText(payload) { onError?(error) }
         case "send_agent_message_response":
             guard matchesAgent(payload),
                   let requestId = payload["requestId"] as? String,
@@ -151,9 +161,6 @@ final class TimelineClient {
             if requestId == fetchRequestId {
                 fetchRequestId = nil
                 fetchFailed(error)
-            } else if requestId == subscribeRequestId {
-                subscribeRequestId = nil
-                onError?(error)
             } else if requestId == cancelRequestId {
                 cancelRequestId = nil
                 onError?(error)
@@ -204,20 +211,7 @@ final class TimelineClient {
         reportedDisconnect = false
         invalidateRetry()
         fetchTail()
-        if let agentId { subscribe([agentId]) }
-    }
-
-    private func subscribe(_ agentIds: [String], reportFailure: Bool = true) {
-        let requestId = Self.newId("sub")
-        subscribeRequestId = requestId
-        if !send([
-            "type": "agent.timeline.set_subscription.request",
-            "agentIds": agentIds,
-            "requestId": requestId,
-        ]) {
-            subscribeRequestId = nil
-            if reportFailure { notConnectedOnce() }
-        }
+        if let agentId, !subscriptions.setAgent(agentId, for: subscriptionWatcher) { notConnectedOnce() }
     }
 
     /// Supersedes any fetch in flight (its response will be ignored).

@@ -29,6 +29,8 @@ runEditMenuSpecTests()
 runDispatcherStoreTests()
 runQuickAskTargetsTests()
 runQuickAskMenuTests()
+runTimelineSubscriptionsTests()
+runQuickAskPanelRouterTests()
 
 if failureCount == 0 {
     print("ALL \(testCount) TESTS PASSED")

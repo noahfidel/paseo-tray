@@ -29,6 +29,9 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     var onOpenInPaseo: (() -> Void)?
     /// The panel closed or was reset for a new mode; any chat it showed is over.
     var onClose: (() -> Void)?
+    /// Quick Ask: the user picked a target in the picker; return false to refuse it (another panel
+    /// owns it) and the picker goes back to its previous selection.
+    var onPickTarget: ((String) -> Bool)?
     /// Supplies bot avatars (header, picker).
     var avatarProvider: ((TrayBot) -> NSImage)?
 
@@ -38,6 +41,16 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     private(set) var session = 0
     /// The agent whose chat Quick Ask is showing.
     private(set) var chatAgentId: String?
+    /// The picker id (`QuickAskTargets`) of the target the chat was started with.
+    private(set) var chatTargetId: String?
+
+    /// Quick Ask's target: the chat's target once a chat started, else the picker selection (or the
+    /// target asked for before the picker had it).
+    var targetId: String? {
+        guard case .quickAsk? = mode else { return nil }
+        if chatAgentId != nil { return chatTargetId }
+        return pendingTargetId ?? selectedTargetId
+    }
 
     /// True while Quick Ask is on screen (whether or not a chat has started).
     var isQuickAskVisible: Bool {
@@ -77,6 +90,8 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     private var pendingTargetId: String?
     /// The selection was chosen by the user or the menu (kept across rebuilds), not defaulted to the first entry.
     private var selectionIsExplicit = false
+    /// The picker selection last accepted, to go back to when `onPickTarget` refuses a pick.
+    private var selectedTargetId: String?
     /// A follow-up was sent and no render has confirmed the real turn state yet.
     private var followUpPending = false
     private var preChatConstraints: [NSLayoutConstraint] = []
@@ -119,12 +134,15 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         session += 1
         isSending = false
         chatAgentId = nil
+        chatTargetId = nil
         onClose?()
     }
 
     // MARK: - Presenting
 
-    func present(mode: Mode) {
+    /// `cascadeFrom`: the frame of the last panel opened, so a new one is offset from it instead of
+    /// covering it exactly.
+    func present(mode: Mode, cascadeFrom: NSRect? = nil) {
         // Quick Ask already on screen: bring it forward as it is (keeps a chat in progress).
         if case .quickAsk = mode, isQuickAskVisible {
             NSApp.activate(ignoringOtherApps: true)
@@ -136,6 +154,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         session += 1
         if chatAgentId != nil {
             chatAgentId = nil
+            chatTargetId = nil
             onClose?()
         }
         self.mode = mode
@@ -159,7 +178,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
             contentView = quickContent
             title = L("Quick Ask", "快速提问")
             resetQuickAsk()
-            positionNearTop(contentSize: Self.quickAskSize)
+            positionNearTop(contentSize: Self.quickAskSize, cascadeFrom: cascadeFrom)
         }
         // The panel can become key without making the tray the active app, but a tray
         // (accessory) app often won't route typing to it unless it is active. Activating
@@ -260,6 +279,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
             selectionIsExplicit = choice.explicit
             if choice.pendingCleared { pendingTargetId = nil }
         }
+        selectedTargetId = botPopup.selectedItem?.representedObject as? String
         updateQuickControls()
     }
 
@@ -273,9 +293,11 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     }
 
     /// The first question started a chat: switch to the transcript and follow-up box.
-    func chatStarted(agentId: String) {
+    /// `targetId` is the picker id of the bot or dispatcher asked; it stays the panel's target.
+    func chatStarted(agentId: String, targetId: String) {
         guard case .quickAsk? = mode else { return }
         chatAgentId = agentId
+        chatTargetId = targetId
         inputTextView.string = ""
         // The first turn is already running; the first render corrects this.
         turnRunning = true
@@ -336,7 +358,9 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     private func resetQuickAsk() {
         pendingTargetId = nil
         selectionIsExplicit = false
+        selectedTargetId = nil
         chatAgentId = nil
+        chatTargetId = nil
         turnRunning = false
         followUpPending = false
         bots = []
@@ -379,6 +403,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         pendingTargetId = nil
         selectionIsExplicit = true
         botPopup.selectItem(at: index)
+        selectedTargetId = id
         updateQuickControls()
     }
 
@@ -649,8 +674,20 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         )
     }
 
-    private func positionNearTop(contentSize: NSSize) {
+    private static let cascadeOffset: CGFloat = 28
+
+    private func positionNearTop(contentSize: NSSize, cascadeFrom: NSRect? = nil) {
         let size = frameRect(forContentRect: NSRect(origin: .zero, size: contentSize)).size
+        if let from = cascadeFrom,
+           let visible = (NSScreen.screens.first { $0.frame.intersects(from) } ?? NSScreen.main)?.visibleFrame {
+            // Down and right of the last panel; back near the top when that would leave the screen.
+            let x = from.minX + Self.cascadeOffset
+            let y = from.maxY - Self.cascadeOffset - size.height
+            if x + size.width <= visible.maxX, y >= visible.minY {
+                setFrame(NSRect(origin: NSPoint(x: x, y: y), size: size), display: false)
+                return
+            }
+        }
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
         guard let visible = screen?.visibleFrame else { return }
@@ -674,8 +711,19 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     }
 
     @objc private func botChanged() {
+        let id = botPopup.selectedItem?.representedObject as? String
+        if let id, id != selectedTargetId, onPickTarget?(id) == false {
+            // Another panel owns that target (and was brought forward): keep this one as it was.
+            if let previous = selectedTargetId,
+               let index = botPopup.itemArray.firstIndex(where: { ($0.representedObject as? String) == previous }) {
+                botPopup.selectItem(at: index)
+            }
+            updateQuickControls()
+            return
+        }
         pendingTargetId = nil
         selectionIsExplicit = true
+        selectedTargetId = id
         updateQuickControls()
     }
 
