@@ -65,6 +65,28 @@ func testRewatchReleasesOldSubscription() {
     expect(changes == 2, "owned: a frame from its own subscription applies")
 }
 
+func testStopWatchingWhileTurnRunningReleasesWithoutCancelling() {
+    let sender = FakeSender()
+    let client = TimelineClient(send: { sender.send($0) })
+    client.watch(agentId: "a1")
+    answerSubscribe(client, sender, "s1")
+    client.handle(type: "fetch_agent_timeline_response", payload: snapshot(for: sender.fetches.last!))
+    var changes = 0
+    client.onChange = { _ in changes += 1 }
+    client.handle(type: "agent_stream", payload: [
+        "agentId": "a1", "epoch": "e1", "seq": 6, "subscriptionId": "s1",
+        "event": ["type": "turn_started"]])
+    expect(changes == 1, "newchat: a running turn is applied while watching")
+    client.stopWatching()
+    expect(sender.messages(releaseType).count == 1 && sender.messages(releaseType).last?["subscriptionId"] as? String == "s1",
+           "newchat: stop releases exactly the owned subscription")
+    expect(sender.messages("cancel_agent_request").isEmpty, "newchat: stop never cancels the running turn")
+    client.handle(type: "agent_stream", payload: stream("a1", seq: 7, text: "late", subscriptionId: "s1"))
+    client.handle(type: "agent_stream", payload: stream("a1", seq: 8, text: "late2"))
+    expect(changes == 1, "newchat: frames after stop don't change state")
+    expect(client.agentId == nil, "newchat: nothing is watched after stop")
+}
+
 func testLateSubscribeResponseIsReleased() {
     let sender = FakeSender()
     let client = TimelineClient(send: { sender.send($0) })
@@ -216,6 +238,7 @@ func runTimelineSubscriptionTests() {
     testUnclaimedSubscribeResponseIsReleased()
     testSubscribeResponseRecordsIdAndStopReleasesIt()
     testRewatchReleasesOldSubscription()
+    testStopWatchingWhileTurnRunningReleasesWithoutCancelling()
     testLateSubscribeResponseIsReleased()
     testReconnectResubscribesWithoutRelease()
     testSubscribeErrorReported()

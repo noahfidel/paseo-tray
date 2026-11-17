@@ -124,4 +124,14 @@ func runQuickAskPanelRouterTests() {
     lastUsed([p("bot:a", visible: false)], ab, false, .open, "bot:a", "invisible owner is no owner")
     lastUsed([p("bot:c")], [], false, .focus(0), nil, "empty recent: route with nil target")
     lastUsed([], [], true, .open, nil, "empty recent, no panels opens")
+
+    // A panel after "New chat": still on its old target, not busy, no draft, visible, not key.
+    let afterNewChat = [p("bot:x")]
+    expect(R.route(panels: afterNewChat, target: "bot:y", toggle: false) == .retarget(0),
+           "new chat: the reset panel is retargeted")
+    expect(R.route(panels: afterNewChat, target: "bot:x", toggle: false) == .focus(0),
+           "new chat: the reset panel still owns its old target")
+    lastUsed(afterNewChat, ["bot:x"], false, .focus(0), "bot:x", "new chat: reset panel is pre-chat, not a new panel")
+    lastUsed(afterNewChat, ["bot:x"], true, .focus(0), "bot:x", "new chat: reset panel is focused by the hotkey")
+    lastUsed([p("bot:x", busy: true)], ["bot:x"], false, .open, nil, "new chat contrast: the same panel busy is not reused")
 }

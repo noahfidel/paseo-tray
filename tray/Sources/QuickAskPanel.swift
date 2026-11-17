@@ -29,6 +29,8 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     var onOpenInPaseo: (() -> Void)?
     /// The panel closed or was reset for a new mode; any chat it showed is over.
     var onClose: (() -> Void)?
+    /// The panel stopped showing its chat (New chat): the owner stops watching it. Unlike `onClose`, the panel stays.
+    var onChatEnded: (() -> Void)?
     /// Quick Ask: the user picked a target in the picker; return false to refuse it (another panel
     /// owns it) and the picker goes back to its previous selection.
     var onPickTarget: ((String) -> Bool)?
@@ -73,6 +75,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     private let quickContent = NSView(frame: NSRect(x: 0, y: 0, width: 520, height: 250))
     private let botPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let headerOpenButton = NSButton(title: "", target: nil, action: nil)
+    private let headerNewChatButton = NSButton(title: "", target: nil, action: nil)
     private let transcript = ChatTranscriptView(frame: .zero)
     private let banner = NSBox()
     private let bannerLabel = NSTextField(labelWithString: "")
@@ -382,10 +385,6 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         pendingTargetId = nil
         selectionIsExplicit = false
         selectedTargetId = nil
-        chatAgentId = nil
-        chatTargetId = nil
-        turnRunning = false
-        followUpPending = false
         bots = []
         botsSettled = false
         botsFetch.reset()
@@ -393,6 +392,15 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         botPopup.removeAllItems()
         botPopup.addItem(withTitle: L("Loading bots…", "正在加载机器人…"))
         botPopup.lastItem?.isEnabled = false
+        resetQuickAskUI()
+    }
+
+    /// Back to the empty pre-chat layout; the picker contents are left as they are.
+    private func resetQuickAskUI() {
+        chatAgentId = nil
+        chatTargetId = nil
+        turnRunning = false
+        followUpPending = false
         botPopup.isEnabled = true
         inputTextView.string = ""
         transcript.update(rows: [])
@@ -408,6 +416,40 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         contentMinSize = NSSize(width: 420, height: 200)
         isSending = false
         updateQuickControls()
+    }
+
+    /// Whether "New chat" (the header button and Cmd+N) can be used now.
+    private var isNewChatAvailable: Bool {
+        guard case .quickAsk? = mode else { return false }
+        return QuickAskNewChat.isAvailable(inChat: chatAgentId != nil, hasDraft: hasDraft, isSending: isSending)
+    }
+
+    /// Leaves the current chat (or draft) for a fresh one without closing the panel. Nothing is
+    /// cancelled or deleted in Paseo: a running turn keeps running, the panel just stops watching.
+    func startNewChat() {
+        guard case .quickAsk? = mode else { return }
+        // Stale in-flight results belong to the old chat now.
+        session += 1
+        isSending = false
+        let target = QuickAskNewChat.preselectTarget(chatTargetId: chatTargetId, selectedTargetId: selectedTargetId)
+        let wasInChat = chatAgentId != nil
+        resetQuickAskUI()
+        if wasInChat { onChatEnded?() }
+        resizeKeepingTop(contentSize: Self.quickAskSize)
+        if let target { selectTarget(id: target) }
+        makeFirstResponder(inputTextView)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if case .quickAsk? = mode, isNewChatAvailable,
+           QuickAskNewChat.isShortcut(characters: event.charactersIgnoringModifiers,
+                                      command: flags.contains(.command), shift: flags.contains(.shift),
+                                      option: flags.contains(.option), control: flags.contains(.control)) {
+            startNewChat()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 
     /// Text typed before a chat started (a retarget would move it to another target).
@@ -447,6 +489,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         quickSendButton.isEnabled = !isSending && (inChat || selectedTarget != nil)
         inputTextView.isEditable = !isSending
         botPopup.isEnabled = !inChat && !isSending && !(bots.isEmpty && dispatchers.isEmpty)
+        headerNewChatButton.isHidden = !isNewChatAvailable
     }
 
     private func setBannerVisible(_ visible: Bool) {
@@ -559,6 +602,17 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         headerOpenButton.isHidden = true
         headerOpenButton.setContentCompressionResistancePriority(.required, for: .horizontal)
 
+        headerNewChatButton.translatesAutoresizingMaskIntoConstraints = false
+        headerNewChatButton.title = L("New chat", "新建对话")
+        headerNewChatButton.toolTip = L("New chat (⌘N)", "新建对话 (⌘N)")
+        headerNewChatButton.isBordered = false
+        headerNewChatButton.contentTintColor = .linkColor
+        headerNewChatButton.font = NSFont.systemFont(ofSize: 12)
+        headerNewChatButton.target = self
+        headerNewChatButton.action = #selector(newChatTapped)
+        headerNewChatButton.isHidden = true
+        headerNewChatButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+
         transcript.translatesAutoresizingMaskIntoConstraints = false
         transcript.isHidden = true
 
@@ -621,7 +675,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         stopButton.action = #selector(stopTapped)
         stopButton.isHidden = true
 
-        for view in [botPopup, headerOpenButton, transcript, banner, inputScroll, quickErrorLabel,
+        for view in [botPopup, headerOpenButton, headerNewChatButton, transcript, banner, inputScroll, quickErrorLabel,
                      quickHintLabel, quickSendButton, stopButton] as [NSView] {
             content.addSubview(view)
         }
@@ -631,10 +685,11 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
             botPopup.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: margin),
             botPopup.topAnchor.constraint(equalTo: content.topAnchor, constant: 14),
             botPopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
-            botPopup.trailingAnchor.constraint(lessThanOrEqualTo: headerOpenButton.leadingAnchor, constant: -8),
+            botPopup.trailingAnchor.constraint(lessThanOrEqualTo: headerNewChatButton.leadingAnchor, constant: -8),
 
             headerOpenButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -margin),
             headerOpenButton.centerYAnchor.constraint(equalTo: botPopup.centerYAnchor),
+            headerNewChatButton.centerYAnchor.constraint(equalTo: botPopup.centerYAnchor),
 
             transcript.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: margin),
             transcript.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -margin),
@@ -662,10 +717,13 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
 
         // Before the first question the transcript collapses and the prompt box fills the panel;
         // in a chat the transcript fills it and the follow-up box is a fixed strip.
+        // "New chat" sits at the right edge before a chat (Open in Paseo is hidden) and left of it in a chat.
         preChatConstraints = [
             transcript.heightAnchor.constraint(equalToConstant: 0),
+            headerNewChatButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -margin),
         ]
         chatConstraints = [
+            headerNewChatButton.trailingAnchor.constraint(equalTo: headerOpenButton.leadingAnchor, constant: -12),
             transcript.heightAnchor.constraint(greaterThanOrEqualToConstant: 120),
             inputScroll.heightAnchor.constraint(equalToConstant: 56),
         ]
@@ -737,6 +795,11 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         onStop?()
     }
 
+    @objc private func newChatTapped() {
+        guard isNewChatAvailable else { return }
+        startNewChat()
+    }
+
     @objc private func openInPaseoTapped() {
         onOpenInPaseo?()
     }
@@ -788,6 +851,11 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     }
 
     // MARK: - NSTextViewDelegate
+
+    func textDidChange(_ notification: Notification) {
+        // The draft decides whether "New chat" shows.
+        if case .quickAsk? = mode, (notification.object as? NSTextView) === inputTextView { updateQuickControls() }
+    }
 
     func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         if commandSelector == #selector(NSResponder.insertNewline(_:)) {

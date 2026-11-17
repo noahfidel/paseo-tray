@@ -452,6 +452,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             guard let self, let window else { return true }
             return self.quickAskPickerChose(targetId, in: window)
         }
+        panel.onChatEnded = { [weak window] in
+            // New chat: this panel's chat is no longer watched; its owned subscription is released.
+            window?.timeline.stopWatching()
+        }
         panel.onClose = { [weak self, weak window] in
             guard let window else { return }
             // Only this panel's watch ends (its own subscription is released); the others keep theirs.
