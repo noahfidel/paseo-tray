@@ -59,15 +59,44 @@ enum QuickAskPanelRouter {
     /// (mapped to its current agent). Nil when nothing resolves.
     static func lastUsedTargetId(recent: [String], dispatchers: [(agentId: String, groupId: String)],
                                  botsAvailable: Bool) -> String? {
+        resolvedTargetIds(recent: recent, dispatchers: dispatchers, botsAvailable: botsAvailable).first
+    }
+
+    /// Every `recent` entry that still resolves (same mapping as `lastUsedTargetId`), in order,
+    /// without duplicates.
+    static func resolvedTargetIds(recent: [String], dispatchers: [(agentId: String, groupId: String)],
+                                  botsAvailable: Bool) -> [String] {
+        var ids: [String] = []
         for key in recent {
+            var id: String?
             if key.hasPrefix("dispatcher:") {
                 if let match = dispatchers.first(where: { BotRecents.dispatcherKey(groupId: $0.groupId) == key }) {
-                    return QuickAskTargets.dispatcherId(match.agentId)
+                    id = QuickAskTargets.dispatcherId(match.agentId)
                 }
             } else if botsAvailable, !key.isEmpty {
-                return QuickAskTargets.botId(key)
+                id = QuickAskTargets.botId(key)
             }
+            if let id, !ids.contains(id) { ids.append(id) }
         }
-        return nil
+        return ids
+    }
+
+    /// Hotkey and the plain "Quick Ask…" row. `recent` is the resolved recent list; the last-used
+    /// target is its first entry. Unless the last-used target's visible owner panel is busy (in a
+    /// chat or sending), this is `route` on the last-used target. A busy owner is never closed,
+    /// focused or retargeted: instead a visible pre-chat panel (the key one, else the last) is
+    /// focused as it is (the hotkey closes it when it is key), and with none a new panel opens
+    /// preselected on the first recent target that has no visible owner.
+    /// `target` is what the caller should select for `.open` / `.retarget` (nil: leave the picker).
+    static func routeLastUsed(panels: [Panel], recent: [String], toggle: Bool) -> (action: Action, target: String?) {
+        let last = recent.first
+        guard let last, let owner = owner(of: last, panels: panels), panels[owner].busy else {
+            return (route(panels: panels, target: last, toggle: toggle), last)
+        }
+        let preChat = panels.indices.filter { panels[$0].isVisible && !panels[$0].busy }
+        if let index = preChat.first(where: { panels[$0].isKey }) ?? preChat.last {
+            return (toggle && panels[index].isKey ? .close(index) : .focus(index), nil)
+        }
+        return (.open, recent.first { self.owner(of: $0, panels: panels) == nil })
     }
 }

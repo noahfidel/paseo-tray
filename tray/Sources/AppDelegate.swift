@@ -322,9 +322,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
         menuController.setQuickAskShortcut(hotKey != nil ? setting.spec : nil)
     }
 
-    /// Hotkey: the last-used target's panel; closes it when it is already visible and key.
+    /// Hotkey: the last-used target's panel, closing it when it is already visible and key. When
+    /// that panel is in a chat, a pre-chat panel or a new one is used instead (see `routeLastUsed`).
     private func toggleQuickAsk() {
-        openQuickAsk(targetId: lastUsedTargetId(), toggle: true)
+        openLastUsedQuickAsk(toggle: true)
     }
 
     func menuControllerWillOpen() {
@@ -332,16 +333,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
     }
 
     func menuControllerQuickAsk() {
-        openQuickAsk(targetId: lastUsedTargetId(), toggle: false)
+        openLastUsedQuickAsk(toggle: false)
     }
 
     func menuControllerQuickAsk(targetId: String) {
         openQuickAsk(targetId: targetId, toggle: false)
     }
 
-    /// The first recent target that still resolves (a dispatcher must be known; bots need tray.json).
-    private func lastUsedTargetId() -> String? {
-        QuickAskPanelRouter.lastUsedTargetId(
+    /// The recent targets that still resolve, most recent first (a dispatcher must be known; bots need tray.json).
+    private func recentTargetIds() -> [String] {
+        QuickAskPanelRouter.resolvedTargetIds(
             recent: BotRecents.recentIds(),
             dispatchers: dispatcherStore.dispatchers().map { (agentId: $0.agentId, groupId: $0.groupId) },
             botsAvailable: TrayBotsFile.load() != nil)
@@ -361,10 +362,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
     /// Opens or brings forward the panel for `targetId` (one panel per target; see `QuickAskPanelRouter`).
     /// Does nothing when there is no target: no tray.json (paseo-bots) and no Flowly dispatchers.
     private func openQuickAsk(targetId: String?, toggle: Bool) {
+        guard prepareQuickAsk() else { return }
+        apply(QuickAskPanelRouter.route(panels: panelStates(), target: targetId, toggle: toggle), targetId: targetId)
+    }
+
+    /// Hotkey / plain "Quick Ask…" row: routes on the recent targets (see `QuickAskPanelRouter.routeLastUsed`).
+    private func openLastUsedQuickAsk(toggle: Bool) {
+        guard prepareQuickAsk() else { return }
+        let routed = QuickAskPanelRouter.routeLastUsed(
+            panels: panelStates(), recent: recentTargetIds(), toggle: toggle)
+        apply(routed.action, targetId: routed.target)
+    }
+
+    /// False when there is no target: no tray.json (paseo-bots) and no Flowly dispatchers.
+    /// Otherwise drops closed panels, so indices match `panelStates()`.
+    private func prepareQuickAsk() -> Bool {
         // Dispatchers don't need paseo-bots, so they keep Quick Ask usable without it.
-        guard TrayBotsFile.load() != nil || !dispatcherStore.dispatchers().isEmpty else { return }
+        guard TrayBotsFile.load() != nil || !dispatcherStore.dispatchers().isEmpty else { return false }
         quickAskWindows.removeAll { !$0.panel.isQuickAskVisible }
-        switch QuickAskPanelRouter.route(panels: panelStates(), target: targetId, toggle: toggle) {
+        return true
+    }
+
+    private func apply(_ action: QuickAskPanelRouter.Action, targetId: String?) {
+        switch action {
         case .close(let index):
             quickAskWindows[index].panel.close()
         case .focus(let index):

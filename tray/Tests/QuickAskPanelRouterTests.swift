@@ -92,4 +92,36 @@ func runQuickAskPanelRouterTests() {
            "lastUsed: only unknown dispatchers resolves to nothing")
     expect(R.lastUsedTargetId(recent: ["b1", "dispatcher:g1"], dispatchers: ds, botsAvailable: false) == "dispatcher:ag1",
            "lastUsed: bot ids are skipped without paseo-bots")
+    expect(R.resolvedTargetIds(recent: ["b1", "dispatcher:gone", "dispatcher:g2", "b1", "b2"], dispatchers: ds,
+                               botsAvailable: true) == ["bot:b1", "dispatcher:ag2", "bot:b2"],
+           "resolved: all resolvable in order, unknown dispatchers skipped, deduped")
+    expect(R.resolvedTargetIds(recent: ["b1", "dispatcher:g1", "b2"], dispatchers: ds, botsAvailable: false)
+           == ["dispatcher:ag1"], "resolved: bots skipped when unavailable")
+
+    // Last-used (hotkey / Quick Ask… row)
+    func lastUsed(_ panels: [R.Panel], _ recent: [String], _ toggle: Bool, _ action: R.Action, _ target: String?,
+                  _ name: String) {
+        let r = R.routeLastUsed(panels: panels, recent: recent, toggle: toggle)
+        expect(r.action == action && r.target == target, "lastUsed route: \(name) (got \(r))")
+    }
+    let ab = ["bot:a", "bot:b"]
+    lastUsed([p("bot:a", busy: true, key: true)], ab, true, .open, "bot:b", "busy key owner is not closed, opens on next free")
+    lastUsed([p("bot:a", busy: true, key: true)], ab, false, .open, "bot:b", "menu row opens on next free")
+    lastUsed([p("bot:a", busy: true), p("bot:b", busy: true)], ab, false, .open, nil, "all recents owned")
+    lastUsed([p("bot:a", busy: true), p("bot:b", busy: true, visible: false)], ab, false, .open, "bot:b",
+             "invisible owner does not count")
+    lastUsed([p("bot:a", busy: true), p("bot:c", key: true)], ab, true, .close(1), nil, "key pre-chat panel closes on hotkey")
+    lastUsed([p("bot:a", busy: true), p("bot:c")], ab, true, .focus(1), nil, "non-key pre-chat panel is focused")
+    lastUsed([p("bot:a", busy: true), p("bot:c", key: true)], ab, false, .focus(1), nil, "menu row focuses key pre-chat panel")
+    lastUsed([p("bot:a", busy: true), p("bot:c", draft: true)], ab, false, .focus(1), nil, "draft panel is focused, not retargeted")
+    lastUsed([p("bot:a", busy: true), p("bot:c"), p("bot:d", key: true), p("bot:e")], ab, false, .focus(2), nil,
+             "key pre-chat panel preferred")
+    lastUsed([p("bot:a", busy: true), p("bot:c"), p("bot:d")], ab, false, .focus(2), nil, "else the last pre-chat panel")
+    lastUsed([p("bot:a", key: true)], ab, true, .close(0), "bot:a", "non-busy owner behaves like route: closes")
+    lastUsed([p("bot:a")], ab, true, .focus(0), "bot:a", "non-busy owner behaves like route: focuses")
+    lastUsed([p("bot:c")], ab, false, .retarget(0), "bot:a", "no owner: retargets a pre-chat panel to last-used")
+    lastUsed([p("bot:c", busy: true)], ab, false, .open, "bot:a", "no owner: opens on last-used")
+    lastUsed([p("bot:a", visible: false)], ab, false, .open, "bot:a", "invisible owner is no owner")
+    lastUsed([p("bot:c")], [], false, .focus(0), nil, "empty recent: route with nil target")
+    lastUsed([], [], true, .open, nil, "empty recent, no panels opens")
 }
