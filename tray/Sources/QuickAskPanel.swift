@@ -75,6 +75,8 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     private var turnRunning = false
     /// A target asked for before the picker had it (bots load asynchronously); applied by the next rebuild.
     private var pendingTargetId: String?
+    /// The selection was chosen by the user or the menu (kept across rebuilds), not defaulted to the first entry.
+    private var selectionIsExplicit = false
     /// A follow-up was sent and no render has confirmed the real turn state yet.
     private var followUpPending = false
     private var preChatConstraints: [NSLayoutConstraint] = []
@@ -207,7 +209,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
 
     // MARK: - Quick Ask
 
-    /// Fills the bot part of the picker (already in the order to show).
+    /// Fills the bot part of the picker (API order; recents decide the display order).
     func setBots(_ bots: [TrayBot]) {
         self.bots = bots
         rebuildPicker()
@@ -221,11 +223,12 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
 
     private func rebuildPicker() {
         // A pending target survives rebuilds that don't contain it yet (dispatchers arrive before bots).
-        let previous = pendingTargetId ?? (botPopup.selectedItem?.representedObject as? String)
+        let previous = botPopup.selectedItem?.representedObject as? String
         botPopup.removeAllItems()
         let entries = QuickAskTargets.items(
             bots: bots.map { (id: $0.id, title: $0.name) },
-            dispatchers: dispatchers.map { (id: $0.agentId, title: $0.menuTitle) })
+            dispatchers: dispatchers.map { (id: $0.agentId, groupId: $0.groupId, title: $0.menuTitle) },
+            recent: BotRecents.recentIds())
         if entries.isEmpty {
             botPopup.addItem(withTitle: L("No bots", "没有机器人"))
             botPopup.lastItem?.isEnabled = false
@@ -248,12 +251,14 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
                     botPopup.menu?.addItem(item)
                 }
             }
-            if let previous, let index = botPopup.itemArray.firstIndex(where: { ($0.representedObject as? String) == previous }) {
+            let ids = botPopup.itemArray.compactMap { $0.representedObject as? String }
+            let choice = QuickAskTargets.selection(ids: ids, current: previous,
+                                                   currentIsExplicit: selectionIsExplicit, pending: pendingTargetId)
+            if let id = choice.id, let index = botPopup.itemArray.firstIndex(where: { ($0.representedObject as? String) == id }) {
                 botPopup.selectItem(at: index)
-                pendingTargetId = nil
-            } else if let first = botPopup.itemArray.firstIndex(where: { $0.representedObject != nil }) {
-                botPopup.selectItem(at: first)
             }
+            selectionIsExplicit = choice.explicit
+            if choice.pendingCleared { pendingTargetId = nil }
         }
         updateQuickControls()
     }
@@ -330,6 +335,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
 
     private func resetQuickAsk() {
         pendingTargetId = nil
+        selectionIsExplicit = false
         chatAgentId = nil
         turnRunning = false
         followUpPending = false
@@ -371,6 +377,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
             return
         }
         pendingTargetId = nil
+        selectionIsExplicit = true
         botPopup.selectItem(at: index)
         updateQuickControls()
     }
@@ -668,6 +675,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
 
     @objc private func botChanged() {
         pendingTargetId = nil
+        selectionIsExplicit = true
         updateQuickControls()
     }
 
@@ -714,12 +722,5 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
             return true
         }
         return false
-    }
-}
-
-extension BotRecents {
-    /// Bots in Quick Ask's picker order: last used first, then API order.
-    static func ordered(_ bots: [TrayBot]) -> [TrayBot] {
-        order(bots, recent: recentIds(), id: { $0.id })
     }
 }

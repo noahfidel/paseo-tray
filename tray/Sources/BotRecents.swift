@@ -1,6 +1,6 @@
 import Foundation
 
-/// Quick Ask's bot order: last used first, then the rest in API order. Foundation only;
+/// Quick Ask's recents: bot ids and dispatcher keys, last used first. Foundation only;
 /// the `[TrayBot]` overload lives next to the panel.
 enum BotRecents {
     static let defaultsKey = "QuickAskRecentBots"
@@ -12,6 +12,13 @@ enum BotRecents {
 
     static func markUsed(_ botId: String, defaults: UserDefaults = .standard) {
         defaults.set(adding(botId, to: recentIds(defaults: defaults)), forKey: defaultsKey)
+    }
+
+    /// Recents key for a dispatcher: its group id, which stays the same across agent restarts.
+    static func dispatcherKey(groupId: String) -> String { "dispatcher:\(groupId)" }
+
+    static func markDispatcherUsed(groupId: String, defaults: UserDefaults = .standard) {
+        markUsed(dispatcherKey(groupId: groupId), defaults: defaults)
     }
 
     /// Moves `id` to the front, without duplicates, keeping at most `limit` ids.

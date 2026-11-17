@@ -46,6 +46,24 @@ func runQuickAskMenuTests() {
         .bot(id: "c", name: "Cy"), .bot(id: "a", name: "Ada"), .bot(id: "b", name: "Bo"),
     ], "quickAskMenu: recent first in recent order, rest in API order, unknown ids ignored")
 
+    // Dispatchers share the recents list, keyed by group id.
+    let e1 = TrayDispatcher(agentId: "e1", groupId: "g1", name: "Alpha", needsYou: false, status: "idle")
+    let e2 = TrayDispatcher(agentId: "e2", groupId: "g2", name: "Zen", needsYou: false, status: "idle")
+    expect(M.rows(connected: true, bots: .loaded([a, b, c]), recent: ["dispatcher:g2", "b", "gone"], dispatchers: [e1, e2]) == [
+        .quickAsk, .separator, disp(e2), .bot(id: "b", name: "Bo"),
+        .bot(id: "a", name: "Ada"), .bot(id: "c", name: "Cy"),
+        .separator, header, disp(e1),
+    ], "quickAskMenu: used mixed first, then unused bots, then unused dispatchers")
+    expect(M.rows(connected: true, bots: .loaded([a]), recent: ["dispatcher:g1", "dispatcher:g2"], dispatchers: [e1, e2]) == [
+        .quickAsk, .separator, disp(e1), disp(e2), .bot(id: "a", name: "Ada"),
+    ], "quickAskMenu: all dispatchers used has no header")
+    expect(M.rows(connected: true, bots: .loading, recent: ["dispatcher:g2", "b"], dispatchers: [e1, e2]) == [
+        .quickAsk, .separator, disp(e2), .loading, .separator, header, disp(e1),
+    ], "quickAskMenu: loading puts used dispatchers before the loading row")
+    expect(M.rows(connected: true, bots: .hidden, recent: ["dispatcher:g2"], dispatchers: [e1, e2]) == [
+        .quickAsk, .separator, disp(e2), .separator, header, disp(e1),
+    ], "quickAskMenu: hidden bots still orders used dispatchers first")
+
     expect(M.rows(connected: true, bots: .hidden, recent: [], dispatchers: [d2, d1]) == [
         .quickAsk, .separator, header, disp(d2), disp(d1),
     ], "quickAskMenu: dispatcher order preserved")

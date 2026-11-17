@@ -407,7 +407,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             switch result {
             case .loaded(let bots):
                 self.quickAskPanel.clearError()
-                self.quickAskPanel.setBots(BotRecents.ordered(bots))
+                self.quickAskPanel.setBots(bots)
             case .notInstalled:
                 self.quickAskPanel.setBots([])
                 self.quickAskPanel.showError(BotsError.notInstalled.message)
@@ -475,6 +475,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
                                       "\(current.name) 正在处理中，请稍后再试"))
             return
         }
+        BotRecents.markDispatcherUsed(groupId: current.groupId)
         quickAskPanel.clearError()
         // Send before the panel switches to chat mode is not possible (the client needs the watch
         // first), so on failure put the prompt back into the input.

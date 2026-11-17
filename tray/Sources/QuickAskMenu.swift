@@ -1,7 +1,8 @@
 import Foundation
 
 /// Pure layout of the tray's "Quick Ask" submenu, mirroring the Quick Ask picker: the Quick Ask
-/// entry, bots (last used first, no team headers), then a "Dispatchers" header and dispatchers.
+/// entry, used targets (bots and dispatchers, last used first), never-used bots, then a
+/// "Dispatchers" header and the never-used dispatchers.
 enum QuickAskMenu {
     enum Bots: Equatable {
         case hidden
@@ -26,25 +27,34 @@ enum QuickAskMenu {
     /// [] means hide the whole item.
     static func rows(connected: Bool, bots: Bots, recent: [String], dispatchers: [TrayDispatcher]) -> [Row] {
         guard connected else { return [] }
-        var botRows: [Row] = []
+        let list: [Bot]
+        var loadingRow = false
         switch bots {
-        case .hidden:
-            break
-        case .loading:
-            botRows = [.loading]
-        case .loaded(let list):
-            botRows = BotRecents.order(list, recent: recent, id: { $0.id }).map { .bot(id: $0.id, name: $0.name) }
+        case .hidden: list = []
+        case .loading: list = []; loadingRow = true
+        case .loaded(let loaded): list = loaded
         }
-        if botRows.isEmpty && dispatchers.isEmpty { return [] }
+        if list.isEmpty && !loadingRow && dispatchers.isEmpty { return [] }
 
+        func dispatcherRow(_ d: TrayDispatcher) -> Row {
+            .dispatcher(agentId: d.agentId, name: d.name, title: d.menuTitle, needsYou: d.needsYou)
+        }
+        let parts = QuickAskTargets.partition(
+            bots: list, dispatchers: dispatchers, recent: recent,
+            botKey: { $0.id }, dispatcherKey: { BotRecents.dispatcherKey(groupId: $0.groupId) })
         var rows: [Row] = [.quickAsk, .separator]
-        rows += botRows
-        if !dispatchers.isEmpty {
-            if !botRows.isEmpty { rows.append(.separator) }
-            rows.append(.header(L("Dispatchers", "调度器")))
-            rows += dispatchers.map {
-                .dispatcher(agentId: $0.agentId, name: $0.name, title: $0.menuTitle, needsYou: $0.needsYou)
+        rows += parts.used.map {
+            switch $0 {
+            case .bot(let bot): return .bot(id: bot.id, name: bot.name)
+            case .dispatcher(let d): return dispatcherRow(d)
             }
+        }
+        if loadingRow { rows.append(.loading) }
+        rows += parts.unusedBots.map { .bot(id: $0.id, name: $0.name) }
+        if !parts.unusedDispatchers.isEmpty {
+            if rows.count > 2 { rows.append(.separator) }
+            rows.append(.header(L("Dispatchers", "调度器")))
+            rows += parts.unusedDispatchers.map(dispatcherRow)
         }
         return rows
     }
