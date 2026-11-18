@@ -108,6 +108,14 @@ enum QuickAskHistory {
         return targetId.hasPrefix(QuickAskTargets.botId(""))
     }
 
+    /// The raw bot id (the `paseo-bots.bot` label value) of a bot picker id; nil for any other target.
+    static func rawBotId(fromTargetId targetId: String?) -> String? {
+        let prefix = QuickAskTargets.botId("")
+        guard let targetId, targetId.hasPrefix(prefix) else { return nil }
+        let raw = String(targetId.dropFirst(prefix.count))
+        return raw.isEmpty ? nil : raw
+    }
+
     enum PickAction: Equatable {
         case none
         case focus(Int)

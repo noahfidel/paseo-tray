@@ -452,6 +452,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             guard let self, let window else { return true }
             return self.quickAskPickerChose(targetId, in: window)
         }
+        panel.onHistory = { [weak self, weak window] botId, token in
+            guard let self, let window else { return }
+            self.loadQuickAskHistory(botId: botId, token: token, in: window)
+        }
+        panel.onPickHistory = { [weak self, weak window] agentId in
+            guard let self, let window else { return }
+            self.quickAskHistoryPicked(agentId, in: window)
+        }
         panel.onChatEnded = { [weak window] in
             // New chat: this panel's chat is no longer watched; its owned subscription is released.
             window?.timeline.stopWatching()
@@ -596,6 +604,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
         } else {
             panel.restoreInput(prompt)
             panel.showError(L("Paseo isn't connected", "Paseo 未连接"))
+        }
+    }
+
+    /// History: the bot's chats from the daemon, back to the panel that asked (it drops a stale token).
+    private func loadQuickAskHistory(botId: String, token: Int, in window: QuickAskWindow) {
+        let notConnected = L("Paseo isn't connected", "Paseo 未连接")
+        guard connection.phase == .connected, let client else {
+            window.panel.historyFailed(notConnected, token: token)
+            return
+        }
+        client.fetchBotChats(botId: botId) { [weak window] result in
+            guard let window else { return }
+            switch result {
+            case .success(let entries):
+                window.panel.showHistory(entries, token: token)
+            case .failure(.notConnected):
+                window.panel.historyFailed(notConnected, token: token)
+            case .failure:
+                window.panel.historyFailed(L("Couldn't load chat history", "无法加载对话记录"), token: token)
+            }
+        }
+    }
+
+    /// A History pick: another visible panel on that chat comes forward; otherwise this panel
+    /// leaves its chat (released like New chat) and reopens the picked one.
+    private func quickAskHistoryPicked(_ agentId: String, in window: QuickAskWindow) {
+        guard let index = quickAskWindows.firstIndex(where: { $0 === window }) else { return }
+        // Aligned with quickAskWindows; this panel's own slot is nil.
+        let otherChats: [String?] = quickAskWindows.enumerated().map { offset, other in
+            offset == index || !other.panel.isQuickAskVisible ? nil : other.panel.chatAgentId
+        }
+        let panel = window.panel
+        switch QuickAskHistory.pickAction(agentId: agentId, currentChatAgentId: panel.chatAgentId,
+                                          otherPanelChats: otherChats) {
+        case .none:
+            return
+        case .focus(let other):
+            focusQuickAsk(quickAskWindows[other])
+        case .reopen:
+            guard let targetId = panel.targetId, let botId = QuickAskHistory.rawBotId(fromTargetId: targetId) else { return }
+            guard connection.phase == .connected else {
+                panel.showError(L("Paseo isn't connected", "Paseo 未连接"))
+                return
+            }
+            // Release the old chat's subscription before the panel switches, so none of its frames render.
+            window.timeline.stopWatching()
+            panel.chatReopened(agentId: agentId, targetId: targetId)
+            // As a bot chat in askBot, but loading the newest `reopenTailLimit` entries.
+            window.timeline.watch(agentId: agentId, tailLimit: QuickAskHistory.reopenTailLimit)
+            BotRecents.markUsed(botId)
         }
     }
 

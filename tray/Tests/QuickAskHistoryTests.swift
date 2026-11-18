@@ -91,6 +91,12 @@ func runQuickAskHistoryTests() {
     expect(!H.isAvailable(targetId: "dispatcher:d", isSending: false), "history available: not dispatcher")
     expect(!H.isAvailable(targetId: nil, isSending: false), "history available: not without target")
 
+    // rawBotId
+    expect(H.rawBotId(fromTargetId: "bot:abc") == "abc", "history bot id: strips picker prefix")
+    expect(H.rawBotId(fromTargetId: "dispatcher:d") == nil, "history bot id: not a dispatcher")
+    expect(H.rawBotId(fromTargetId: "bot:") == nil, "history bot id: empty id")
+    expect(H.rawBotId(fromTargetId: nil) == nil, "history bot id: no target")
+
     // pickAction
     expect(H.pickAction(agentId: "a", currentChatAgentId: "a", otherPanelChats: ["a"]) == .none, "history pick: current chat")
     expect(H.pickAction(agentId: "a", currentChatAgentId: nil, otherPanelChats: ["x", "a"]) == .focus(1), "history pick: focus other panel")

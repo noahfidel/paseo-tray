@@ -23,7 +23,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     var onSubmit: ((TrayBot, String) -> Void)?
     /// Quick Ask: first question to the picked bot or dispatcher (validated like `onSubmit`).
     var onAsk: ((QuickAskTarget, String) -> Void)?
-    /// Quick Ask: a follow-up in the chat that `chatStarted` began. Call `clearFollowUp` once sent.
+    /// Quick Ask: a follow-up in the chat `chatStarted` or `chatReopened` opened. Call `clearFollowUp` once sent.
     var onFollowUp: ((String) -> Void)?
     var onStop: (() -> Void)?
     var onOpenInPaseo: (() -> Void)?
@@ -34,6 +34,11 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     /// Quick Ask: the user picked a target in the picker; return false to refuse it (another panel
     /// owns it) and the picker goes back to its previous selection.
     var onPickTarget: ((String) -> Bool)?
+    /// History clicked: fetch the chats of the bot with this raw id, then answer with `showHistory`
+    /// or `historyFailed` and the same token (may be called back synchronously).
+    var onHistory: ((_ botId: String, _ token: Int) -> Void)?
+    /// A History menu row was picked (its agent id).
+    var onPickHistory: ((String) -> Void)?
     /// Supplies bot avatars (header, picker).
     var avatarProvider: ((TrayBot) -> NSImage)?
 
@@ -76,6 +81,13 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     private let botPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let headerOpenButton = NSButton(title: "", target: nil, action: nil)
     private let headerNewChatButton = NSButton(title: "", target: nil, action: nil)
+    private let headerHistoryButton = NSButton(title: "", target: nil, action: nil)
+    /// New chat, History, Open in Paseo; hidden buttons drop out of the row.
+    private let headerStack = NSStackView()
+    /// "Earlier messages are in Paseo" above the transcript of a chat with older entries.
+    private let olderNote = NSStackView()
+    private let olderLabel = NSTextField(labelWithString: "")
+    private let olderButton = NSButton(title: "", target: nil, action: nil)
     private let transcript = ChatTranscriptView(frame: .zero)
     private let banner = NSBox()
     private let bannerLabel = NSTextField(labelWithString: "")
@@ -100,6 +112,14 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     private var selectedTargetId: String?
     /// A follow-up was sent and no render has confirmed the real turn state yet.
     private var followUpPending = false
+    /// Only the latest History request may open the menu.
+    private var historyToken = HistoryFetchToken()
+    /// The History request in flight (its token and the target it was asked for); the button is disabled meanwhile.
+    private var historyRequest: (token: Int, targetId: String)?
+    /// The error line shows a History failure (cleared by the next History click).
+    private var historyErrorShown = false
+    private var olderShownConstraints: [NSLayoutConstraint] = []
+    private var olderHiddenConstraints: [NSLayoutConstraint] = []
     private var preChatConstraints: [NSLayoutConstraint] = []
     private var chatConstraints: [NSLayoutConstraint] = []
     private var bannerShownConstraints: [NSLayoutConstraint] = []
@@ -139,6 +159,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         super.close()
         session += 1
         botsFetch.reset()
+        invalidateHistory()
         isSending = false
         chatAgentId = nil
         chatTargetId = nil
@@ -159,6 +180,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         }
         // Any earlier send (even one still in flight) belongs to the old session now.
         session += 1
+        invalidateHistory()
         if chatAgentId != nil {
             chatAgentId = nil
             chatTargetId = nil
@@ -201,6 +223,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
 
     func showError(_ message: String) {
         if case .quickAsk? = mode {
+            historyErrorShown = false
             quickErrorLabel.stringValue = message
             setQuickErrorVisible(true)
             return
@@ -212,6 +235,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
 
     func clearError() {
         if case .quickAsk? = mode {
+            historyErrorShown = false
             quickErrorLabel.stringValue = ""
             setQuickErrorVisible(false)
             return
@@ -224,7 +248,11 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
 
     func setSending(_ sending: Bool) {
         isSending = sending
-        if sending { clearError() }
+        if sending {
+            clearError()
+            // A History answer must not open a menu over a send.
+            invalidateHistory()
+        }
         if case .quickAsk? = mode {
             updateQuickControls()
             return
@@ -327,7 +355,29 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         inputTextView.string = ""
         // The first turn is already running; the first render corrects this.
         turnRunning = true
+        showChatLayout()
+    }
+
+    /// A chat picked from History: the chat layout like `chatStarted`, but nothing is assumed about
+    /// its turn (the first render sets Stop/Send), the typed text stays as the follow-up draft, and
+    /// `session` is left alone so an in-flight bots fetch still lands. Works pre-chat and from
+    /// another chat (the owner releases that chat's watch first).
+    func chatReopened(agentId: String, targetId: String) {
+        guard case .quickAsk? = mode else { return }
+        invalidateHistory()
+        clearError()
+        // From another chat the panel keeps its size (the user may have resized it).
+        let wasInChat = chatAgentId != nil
+        chatAgentId = agentId
+        chatTargetId = targetId
+        turnRunning = false
+        followUpPending = false
+        showChatLayout(resize: !wasInChat)
+    }
+
+    private func showChatLayout(resize: Bool = true) {
         transcript.update(rows: [])
+        setOlderNoteVisible(false)
         NSLayoutConstraint.deactivate(preChatConstraints)
         NSLayoutConstraint.activate(chatConstraints)
         transcript.isHidden = false
@@ -335,7 +385,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         botPopup.isEnabled = false
         setBannerVisible(false)
         contentMinSize = NSSize(width: 420, height: 380)
-        resizeKeepingTop(contentSize: Self.quickChatSize)
+        if resize { resizeKeepingTop(contentSize: Self.quickChatSize) }
         updateQuickControls()
         makeFirstResponder(inputTextView)
     }
@@ -343,6 +393,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     func render(_ state: TimelineState) {
         guard case .quickAsk? = mode, chatAgentId != nil else { return }
         transcript.update(rows: state.rows)
+        setOlderNoteVisible(state.hasOlder)
         let hasUnsupported = state.rows.contains { if case .unsupported = $0 { return true } else { return false } }
         if state.pendingPermission {
             bannerLabel.stringValue = L("Waiting for your approval", "等待你的批准")
@@ -397,6 +448,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
 
     /// Back to the empty pre-chat layout; the picker contents are left as they are.
     private func resetQuickAskUI() {
+        invalidateHistory()
         chatAgentId = nil
         chatTargetId = nil
         turnRunning = false
@@ -405,6 +457,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         inputTextView.string = ""
         transcript.update(rows: [])
         transcript.isHidden = true
+        setOlderNoteVisible(false)
         headerOpenButton.isHidden = true
         NSLayoutConstraint.deactivate(chatConstraints)
         NSLayoutConstraint.activate(preChatConstraints)
@@ -475,6 +528,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         pendingTargetId = nil
         selectionIsExplicit = true
         botPopup.selectItem(at: index)
+        if id != selectedTargetId { invalidateHistory() }
         selectedTargetId = id
         updateQuickControls()
     }
@@ -489,6 +543,94 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         inputTextView.isEditable = !isSending
         botPopup.isEnabled = !inChat && !isSending && !(bots.isEmpty && dispatchers.isEmpty)
         headerNewChatButton.isHidden = !isNewChatAvailable
+        headerHistoryButton.isHidden = !isHistoryAvailable
+        headerHistoryButton.isEnabled = historyRequest == nil
+    }
+
+    // MARK: - History
+
+    /// Quick Ask on a bot (in a chat or picked pre-chat), not while the first question is sending.
+    private var isHistoryAvailable: Bool {
+        guard case .quickAsk? = mode else { return false }
+        return QuickAskHistory.isAvailable(targetId: targetId, isSending: isSending)
+    }
+
+    /// Drops the History request in flight: its answer opens no menu and shows no error.
+    private func invalidateHistory() {
+        historyToken.invalidate()
+        guard historyRequest != nil else { return }
+        historyRequest = nil
+        updateQuickControls()
+    }
+
+    /// The answer for `token` may still be used: ends the request (re-enabling the button) and
+    /// returns true when the panel is still on the target it was asked for, visible and not sending.
+    private func finishHistoryRequest(_ token: Int) -> Bool {
+        guard let request = historyRequest, request.token == token, historyToken.isCurrent(token) else { return false }
+        historyRequest = nil
+        updateQuickControls()
+        return isVisible && !isSending && targetId == request.targetId && isHistoryAvailable
+    }
+
+    /// The bot's chats arrived: pops the History menu under the button.
+    func showHistory(_ entries: [QuickAskHistory.Entry], token: Int) {
+        guard finishHistoryRequest(token) else { return }
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        if entries.isEmpty {
+            let item = NSMenuItem(title: L("No earlier chats", "没有更早的对话"), action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        } else {
+            let now = Date()
+            for entry in entries {
+                let title = QuickAskHistory.displayTitle(entry.title)
+                let time = QuickAskHistory.relativeTime(from: entry.updatedAt, now: now)
+                let item = NSMenuItem(title: "\(title) — \(time)", action: #selector(historyRowPicked(_:)), keyEquivalent: "")
+                let row = NSMutableAttributedString(string: title, attributes: [.font: NSFont.menuFont(ofSize: 0)])
+                row.append(NSAttributedString(string: "  \(time)", attributes: [
+                    .font: NSFont.menuFont(ofSize: 0),
+                    .foregroundColor: NSColor.secondaryLabelColor,
+                ]))
+                item.attributedTitle = row
+                item.target = self
+                item.representedObject = entry.agentId
+                item.state = entry.agentId == chatAgentId ? .on : .off
+                menu.addItem(item)
+            }
+        }
+        let button = headerHistoryButton
+        let below = button.isFlipped ? button.bounds.maxY + 4 : button.bounds.minY - 4
+        menu.popUp(positioning: nil, at: NSPoint(x: button.bounds.minX, y: below), in: button)
+    }
+
+    /// The History request failed: shows the error line, no menu.
+    func historyFailed(_ message: String, token: Int) {
+        guard finishHistoryRequest(token) else { return }
+        showError(message)
+        historyErrorShown = true
+    }
+
+    @objc private func historyTapped() {
+        guard isHistoryAvailable, historyRequest == nil, let target = targetId,
+              let botId = QuickAskHistory.rawBotId(fromTargetId: target) else { return }
+        if historyErrorShown { clearError() }
+        let token = historyToken.start()
+        historyRequest = (token, target)
+        updateQuickControls()
+        onHistory?(botId, token)
+    }
+
+    @objc private func historyRowPicked(_ sender: NSMenuItem) {
+        guard let agentId = sender.representedObject as? String else { return }
+        onPickHistory?(agentId)
+    }
+
+    private func setOlderNoteVisible(_ visible: Bool) {
+        guard olderNote.isHidden == visible else { return }
+        olderNote.isHidden = !visible
+        NSLayoutConstraint.deactivate(visible ? olderHiddenConstraints : olderShownConstraints)
+        NSLayoutConstraint.activate(visible ? olderShownConstraints : olderHiddenConstraints)
     }
 
     private func setBannerVisible(_ visible: Bool) {
@@ -612,6 +754,44 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         headerNewChatButton.isHidden = true
         headerNewChatButton.setContentCompressionResistancePriority(.required, for: .horizontal)
 
+        headerHistoryButton.translatesAutoresizingMaskIntoConstraints = false
+        headerHistoryButton.title = L("History", "历史记录")
+        headerHistoryButton.toolTip = L("Earlier chats with this bot", "与该机器人的较早对话")
+        headerHistoryButton.isBordered = false
+        headerHistoryButton.contentTintColor = .linkColor
+        headerHistoryButton.font = NSFont.systemFont(ofSize: 12)
+        headerHistoryButton.target = self
+        headerHistoryButton.action = #selector(historyTapped)
+        headerHistoryButton.isHidden = true
+        headerHistoryButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        headerStack.translatesAutoresizingMaskIntoConstraints = false
+        headerStack.orientation = .horizontal
+        headerStack.spacing = 12
+        headerStack.detachesHiddenViews = true
+        for button in [headerNewChatButton, headerHistoryButton, headerOpenButton] {
+            headerStack.addArrangedSubview(button)
+        }
+
+        olderLabel.stringValue = L("Earlier messages are in Paseo", "更早的消息在 Paseo 中")
+        olderLabel.font = NSFont.systemFont(ofSize: 11)
+        olderLabel.textColor = .secondaryLabelColor
+        olderLabel.lineBreakMode = .byTruncatingTail
+        olderLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        olderButton.title = L("Open in Paseo", "在 Paseo 中打开")
+        olderButton.isBordered = false
+        olderButton.contentTintColor = .linkColor
+        olderButton.font = NSFont.systemFont(ofSize: 11)
+        olderButton.target = self
+        olderButton.action = #selector(openInPaseoTapped)
+        olderButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        olderNote.translatesAutoresizingMaskIntoConstraints = false
+        olderNote.orientation = .horizontal
+        olderNote.spacing = 6
+        olderNote.addArrangedSubview(olderLabel)
+        olderNote.addArrangedSubview(olderButton)
+        olderNote.isHidden = true
+
         transcript.translatesAutoresizingMaskIntoConstraints = false
         transcript.isHidden = true
 
@@ -674,7 +854,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         stopButton.action = #selector(stopTapped)
         stopButton.isHidden = true
 
-        for view in [botPopup, headerOpenButton, headerNewChatButton, transcript, banner, inputScroll, quickErrorLabel,
+        for view in [botPopup, headerStack, olderNote, transcript, banner, inputScroll, quickErrorLabel,
                      quickHintLabel, quickSendButton, stopButton] as [NSView] {
             content.addSubview(view)
         }
@@ -684,15 +864,16 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
             botPopup.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: margin),
             botPopup.topAnchor.constraint(equalTo: content.topAnchor, constant: 14),
             botPopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
-            botPopup.trailingAnchor.constraint(lessThanOrEqualTo: headerNewChatButton.leadingAnchor, constant: -8),
+            botPopup.trailingAnchor.constraint(lessThanOrEqualTo: headerStack.leadingAnchor, constant: -8),
 
-            headerOpenButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -margin),
-            headerOpenButton.centerYAnchor.constraint(equalTo: botPopup.centerYAnchor),
-            headerNewChatButton.centerYAnchor.constraint(equalTo: botPopup.centerYAnchor),
+            headerStack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -margin),
+            headerStack.centerYAnchor.constraint(equalTo: botPopup.centerYAnchor),
+
+            olderNote.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: margin),
+            olderNote.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -margin),
 
             transcript.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: margin),
             transcript.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -margin),
-            transcript.topAnchor.constraint(equalTo: botPopup.bottomAnchor, constant: 10),
 
             banner.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: margin),
             banner.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -margin),
@@ -716,15 +897,22 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
 
         // Before the first question the transcript collapses and the prompt box fills the panel;
         // in a chat the transcript fills it and the follow-up box is a fixed strip.
-        // "New chat" sits at the right edge before a chat (Open in Paseo is hidden) and left of it in a chat.
+        // The header row (New chat, History, Open in Paseo) is right-aligned; hidden buttons drop out.
         preChatConstraints = [
             transcript.heightAnchor.constraint(equalToConstant: 0),
-            headerNewChatButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -margin),
         ]
         chatConstraints = [
-            headerNewChatButton.trailingAnchor.constraint(equalTo: headerOpenButton.leadingAnchor, constant: -12),
             transcript.heightAnchor.constraint(greaterThanOrEqualToConstant: 120),
             inputScroll.heightAnchor.constraint(equalToConstant: 56),
+        ]
+        // The older-messages note sits between the header and the transcript only when shown.
+        olderShownConstraints = [
+            olderNote.topAnchor.constraint(equalTo: botPopup.bottomAnchor, constant: 8),
+            transcript.topAnchor.constraint(equalTo: olderNote.bottomAnchor, constant: 6),
+        ]
+        olderHiddenConstraints = [
+            transcript.topAnchor.constraint(equalTo: botPopup.bottomAnchor, constant: 10),
+            olderNote.topAnchor.constraint(equalTo: transcript.topAnchor),
         ]
         bannerShownConstraints = [
             banner.topAnchor.constraint(equalTo: transcript.bottomAnchor, constant: 8),
@@ -742,7 +930,8 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
             quickSendButton.topAnchor.constraint(equalTo: inputScroll.bottomAnchor, constant: 10),
             quickErrorLabel.topAnchor.constraint(equalTo: quickSendButton.topAnchor),
         ]
-        NSLayoutConstraint.activate(preChatConstraints + bannerHiddenConstraints + errorHiddenConstraints)
+        NSLayoutConstraint.activate(preChatConstraints + olderHiddenConstraints + bannerHiddenConstraints
+                                    + errorHiddenConstraints)
     }
 
     /// Grows the prompt-mode panel so a wrapped error stays fully visible, and shrinks it back once cleared.
@@ -815,6 +1004,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         }
         pendingTargetId = nil
         selectionIsExplicit = true
+        if id != selectedTargetId { invalidateHistory() }
         selectedTargetId = id
         updateQuickControls()
     }
