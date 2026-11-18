@@ -4,7 +4,7 @@ import Foundation
 /// the agent directory, how to label them and which pick does what. Foundation only.
 enum QuickAskHistory {
     static let limit = 15
-    static let pageSize = 200
+    static let pageSize = 50
     static let maxPages = 4
     static let timeout: TimeInterval = 5
     static let reopenTailLimit = 500

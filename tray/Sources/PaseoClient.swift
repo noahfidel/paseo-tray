@@ -196,6 +196,7 @@ final class PaseoClient {
         self.session = session
 
         let task = session.webSocketTask(with: url)
+        WebSocketLimits.configure(task)
         self.task = task
         generation += 1
         let currentGeneration = generation

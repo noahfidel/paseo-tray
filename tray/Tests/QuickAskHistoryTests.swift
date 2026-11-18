@@ -57,7 +57,7 @@ func runQuickAskHistoryTests() {
     expect((filter?["labels"] as? [String: String]) == ["paseo-bots.bot": "a"], "history request: bot label")
     expect(filter?["includeArchived"] as? Bool == false, "history request: archived excluded")
     expect(sort?["key"] as? String == "updated_at" && sort?["direction"] as? String == "desc", "history request: sort")
-    expect(page?["limit"] as? Int == 200, "history request: page limit")
+    expect(page?["limit"] as? Int == 50, "history request: page limit")
     expect(page?["cursor"] == nil, "history request: no cursor by default")
     expect(req["scope"] == nil && req["subscribe"] == nil, "history request: no scope or subscribe")
     let req2 = H.request(requestId: "history-2", botId: "a", cursor: "cur")

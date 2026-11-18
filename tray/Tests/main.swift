@@ -34,6 +34,7 @@ runQuickAskPanelRouterTests()
 runBotsFetchGateTests()
 runQuickAskNewChatTests()
 runQuickAskHistoryTests()
+runWebSocketLimitsTests()
 
 if failureCount == 0 {
     print("ALL \(testCount) TESTS PASSED")
