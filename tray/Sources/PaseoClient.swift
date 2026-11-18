@@ -47,6 +47,12 @@ protocol PaseoClientDelegate: AnyObject {
     func paseoClient(_ client: PaseoClient, event: PaseoClientEvent)
 }
 
+enum HistoryFetchError: Error {
+    case notConnected
+    case failed(String)
+    case timedOut
+}
+
 /// Reads the daemon endpoint from a Paseo home. The token is deliberately not
 /// printable or loggable; it is only placed in the hello frame.
 private struct DiscoveryResult {
@@ -204,6 +210,7 @@ final class PaseoClient {
 
     private func cancelConnection() {
         generation += 1
+        failAllHistoryFetches(.notConnected)
         connectTimeoutWorkItem?.cancel()
         connectTimeoutWorkItem = nil
         agentsTimeoutWorkItem?.cancel()
@@ -659,10 +666,112 @@ final class PaseoClient {
         }
     }
 
+    // MARK: - One-shot bot chat history
+
+    /// One in-flight History fetch; `requestId` changes with each page, the work item does not.
+    private final class HistoryFetch {
+        var requestId: String
+        let botId: String
+        var raw: [[String: Any]] = []
+        var pagesFetched = 0
+        var completion: ((Result<[QuickAskHistory.Entry], HistoryFetchError>) -> Void)?
+        var timeout: DispatchWorkItem?
+
+        init(requestId: String, botId: String,
+             completion: @escaping (Result<[QuickAskHistory.Entry], HistoryFetchError>) -> Void) {
+            self.requestId = requestId
+            self.botId = botId
+            self.completion = completion
+        }
+    }
+
+    private var historyFetches: [String: HistoryFetch] = [:]
+
+    private func newHistoryRequestId() -> String {
+        "\(QuickAskHistory.requestIdPrefix)\(UUID().uuidString.prefix(8))"
+    }
+
+    /// Fetches a bot's chats (newest first, at most `QuickAskHistory.limit`), paging the agent
+    /// directory. `botId` is the raw id without the `bot:` prefix. `completion` runs on the main
+    /// queue exactly once.
+    func fetchBotChats(botId: String,
+                       completion: @escaping (Result<[QuickAskHistory.Entry], HistoryFetchError>) -> Void) {
+        let requestId = newHistoryRequestId()
+        let fetch = HistoryFetch(requestId: requestId, botId: botId, completion: completion)
+        let message = QuickAskHistory.request(requestId: requestId, botId: botId, cursor: nil)
+        guard sendSessionMessage(message) else {
+            fetch.timeout = nil
+            if Thread.isMainThread {
+                completion(.failure(.notConnected))
+            } else {
+                DispatchQueue.main.async { completion(.failure(.notConnected)) }
+            }
+            return
+        }
+        historyFetches[requestId] = fetch
+        let item = DispatchWorkItem { [weak self, weak fetch] in
+            guard let self, let fetch else { return }
+            self.finishHistory(fetch, .failure(.timedOut))
+        }
+        fetch.timeout = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + QuickAskHistory.timeout, execute: item)
+    }
+
+    private func finishHistory(_ fetch: HistoryFetch, _ result: Result<[QuickAskHistory.Entry], HistoryFetchError>) {
+        guard let completion = fetch.completion else { return }
+        fetch.completion = nil
+        fetch.timeout?.cancel()
+        fetch.timeout = nil
+        historyFetches[fetch.requestId] = nil
+        completion(result)
+    }
+
+    private func failAllHistoryFetches(_ error: HistoryFetchError) {
+        for fetch in Array(historyFetches.values) {
+            finishHistory(fetch, .failure(error))
+        }
+    }
+
+    private func handleHistoryResponse(_ payload: [String: Any], fetch: HistoryFetch) {
+        guard let entries = payload["entries"] as? [[String: Any]] else {
+            finishHistory(fetch, .failure(.failed(L("Unexpected response format", "返回格式不正确"))))
+            return
+        }
+        fetch.raw.append(contentsOf: entries)
+        fetch.pagesFetched += 1
+        let found = QuickAskHistory.entries(from: fetch.raw, botId: fetch.botId)
+        let pageInfo = payload["pageInfo"] as? [String: Any]
+        let cursor = QuickAskHistory.nextPageCursor(
+            collected: found.count,
+            nextCursor: pageInfo?["nextCursor"] as? String,
+            pagesFetched: fetch.pagesFetched
+        )
+        guard let cursor else {
+            finishHistory(fetch, .success(found))
+            return
+        }
+        let oldId = fetch.requestId
+        let newId = newHistoryRequestId()
+        let message = QuickAskHistory.request(requestId: newId, botId: fetch.botId, cursor: cursor)
+        guard sendSessionMessage(message) else {
+            finishHistory(fetch, .failure(.notConnected))
+            return
+        }
+        historyFetches[oldId] = nil
+        fetch.requestId = newId
+        historyFetches[newId] = fetch
+    }
+
     private func handleRpcError(_ message: [String: Any]) {
         guard let payload = message["payload"] as? [String: Any],
               let requestId = payload["requestId"] as? String else { return }
         let error = payload["error"] as? String ?? L("Request failed", "请求失败")
+        if requestId.hasPrefix(QuickAskHistory.requestIdPrefix) {
+            if let fetch = historyFetches[requestId] {
+                finishHistory(fetch, .failure(.failed(error)))
+            }
+            return
+        }
         if requestId == dispatchersRequestId {
             failDispatchers(error)
             return
@@ -728,6 +837,15 @@ final class PaseoClient {
     }
 
     private func handleFetchAgents(_ message: [String: Any]) {
+        if let payload = message["payload"] as? [String: Any],
+           let requestId = payload["requestId"] as? String,
+           requestId.hasPrefix(QuickAskHistory.requestIdPrefix) {
+            // A late page of a finished fetch has no entry and is dropped here.
+            if let fetch = historyFetches[requestId] {
+                handleHistoryResponse(payload, fetch: fetch)
+            }
+            return
+        }
         if let payload = message["payload"] as? [String: Any],
            let requestId = payload["requestId"] as? String,
            requestId == dispatchersRequestId {
