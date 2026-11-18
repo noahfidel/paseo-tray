@@ -644,6 +644,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PaseoClientDelegate, M
             focusQuickAsk(quickAskWindows[other])
         case .reopen:
             guard let targetId = panel.targetId, let botId = QuickAskHistory.rawBotId(fromTargetId: targetId) else { return }
+            // One panel per target: another visible panel owning this bot comes forward instead.
+            let states = panelStates()
+            if let owner = QuickAskPanelRouter.owner(of: targetId, panels: states, excluding: index) {
+                focusQuickAsk(quickAskWindows[owner])
+                return
+            }
             guard connection.phase == .connected else {
                 panel.showError(L("Paseo isn't connected", "Paseo 未连接"))
                 return

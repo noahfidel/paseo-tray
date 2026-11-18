@@ -71,6 +71,13 @@ func runQuickAskHistoryTests() {
     expect(H.displayTitle(sixty) == sixty, "history title: 60 unchanged")
     expect(H.displayTitle(sixty + "a") == String(repeating: "a", count: 59) + "…", "history title: 61 truncated")
 
+    expect(H.displayTitle("abc", maxLength: 0) == "…", "history title: maxLength 0 does not trap")
+    expect(H.displayTitle("abc", maxLength: -3) == "…", "history title: negative maxLength does not trap")
+
+    // entries: stable order for equal updatedAt
+    let tied = ["b", "c", "a"].map { item($0, updated: Date(timeIntervalSince1970: 500)) }
+    expect(H.entries(from: tied, botId: "a").map(\.agentId) == ["a", "b", "c"], "history: equal updatedAt ordered by agent id")
+
     // relativeTime
     var cal = Calendar(identifier: .gregorian)
     cal.timeZone = TimeZone(identifier: "UTC")!
@@ -83,6 +90,10 @@ func runQuickAskHistoryTests() {
     expect(rel(-3 * 3600) == "3h", "history time: hours same day")
     expect(rel(-18 * 3600) == L("yesterday", "昨天"), "history time: previous day")
     expect(rel(-4 * 86_400) == "4d", "history time: days")
+    expect(rel(-59 * 60) == "59m", "history time: 59 minutes")
+    expect(rel(-60 * 60) == "1h", "history time: 60 minutes is an hour")
+    expect(rel(-6 * 86_400) == "6d", "history time: 6 days")
+    expect(rel(-7 * 86_400) == "Nov 11", "history time: 7 days shows date")
     expect(rel(-10 * 86_400) == "Nov 8", "history time: older shows month and day")
 
     // isAvailable
@@ -90,6 +101,11 @@ func runQuickAskHistoryTests() {
     expect(!H.isAvailable(targetId: "bot:a", isSending: true), "history available: not while sending")
     expect(!H.isAvailable(targetId: "dispatcher:d", isSending: false), "history available: not dispatcher")
     expect(!H.isAvailable(targetId: nil, isSending: false), "history available: not without target")
+    expect(!H.isAvailable(targetId: "bot:", isSending: false), "history available: not a bare bot prefix")
+
+    // keepsDraftOnReopen
+    expect(H.keepsDraftOnReopen(wasInChat: false), "history draft: pre-chat text carries over")
+    expect(!H.keepsDraftOnReopen(wasInChat: true), "history draft: in-chat follow-up is cleared")
 
     // rawBotId
     expect(H.rawBotId(fromTargetId: "bot:abc") == "abc", "history bot id: strips picker prefix")

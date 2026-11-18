@@ -696,11 +696,11 @@ final class PaseoClient {
     /// queue exactly once.
     func fetchBotChats(botId: String,
                        completion: @escaping (Result<[QuickAskHistory.Entry], HistoryFetchError>) -> Void) {
+        dispatchPrecondition(condition: .onQueue(.main))
         let requestId = newHistoryRequestId()
         let fetch = HistoryFetch(requestId: requestId, botId: botId, completion: completion)
         let message = QuickAskHistory.request(requestId: requestId, botId: botId, cursor: nil)
         guard sendSessionMessage(message) else {
-            fetch.timeout = nil
             if Thread.isMainThread {
                 completion(.failure(.notConnected))
             } else {

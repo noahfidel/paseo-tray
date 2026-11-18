@@ -50,7 +50,7 @@ enum QuickAskHistory {
             if let archived = agent["archivedAt"], !(archived is NSNull) { continue }
             result.append(Entry(agentId: id, title: agent["title"] as? String ?? "", updatedAt: updatedAt))
         }
-        result.sort { $0.updatedAt > $1.updatedAt }
+        result.sort { $0.updatedAt != $1.updatedAt ? $0.updatedAt > $1.updatedAt : $0.agentId < $1.agentId }
         return Array(result.prefix(max(0, limit)))
     }
 
@@ -81,7 +81,8 @@ enum QuickAskHistory {
     static func displayTitle(_ raw: String, maxLength: Int = 60) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return L("Untitled chat", "未命名对话") }
-        if trimmed.count > maxLength { return String(trimmed.prefix(maxLength - 1)) + "…" }
+        let limit = max(1, maxLength)
+        if trimmed.count > limit { return String(trimmed.prefix(limit - 1)) + "…" }
         return trimmed
     }
 
@@ -104,9 +105,13 @@ enum QuickAskHistory {
 
     /// History applies to a bot target only, and not while a message is being sent.
     static func isAvailable(targetId: String?, isSending: Bool) -> Bool {
-        guard let targetId, !isSending else { return false }
-        return targetId.hasPrefix(QuickAskTargets.botId(""))
+        guard !isSending else { return false }
+        return rawBotId(fromTargetId: targetId) != nil
     }
+
+    /// Reopening from inside a chat drops the unsent follow-up typed for the old chat; text typed
+    /// before any chat started stays as the draft.
+    static func keepsDraftOnReopen(wasInChat: Bool) -> Bool { !wasInChat }
 
     /// The raw bot id (the `paseo-bots.bot` label value) of a bot picker id; nil for any other target.
     static func rawBotId(fromTargetId targetId: String?) -> String? {

@@ -368,6 +368,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         clearError()
         // From another chat the panel keeps its size (the user may have resized it).
         let wasInChat = chatAgentId != nil
+        if !QuickAskHistory.keepsDraftOnReopen(wasInChat: wasInChat) { inputTextView.string = "" }
         chatAgentId = agentId
         chatTargetId = targetId
         turnRunning = false
@@ -572,9 +573,13 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
         return isVisible && !isSending && targetId == request.targetId && isHistoryAvailable
     }
 
-    /// The bot's chats arrived: pops the History menu under the button.
+    /// The bot's chats arrived: pops the History menu under the button. The pop-up runs on a later
+    /// run loop turn: its nested loop would otherwise stall the GCD main queue (websocket frames,
+    /// the watchdog) while the menu is open.
     func showHistory(_ entries: [QuickAskHistory.Entry], token: Int) {
+        guard let request = historyRequest, request.token == token else { return }
         guard finishHistoryRequest(token) else { return }
+        let requestTarget = request.targetId
         let menu = NSMenu()
         menu.autoenablesItems = false
         if entries.isEmpty {
@@ -599,9 +604,15 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
                 menu.addItem(item)
             }
         }
-        let button = headerHistoryButton
-        let below = button.isFlipped ? button.bounds.maxY + 4 : button.bounds.minY - 4
-        menu.popUp(positioning: nil, at: NSPoint(x: button.bounds.minX, y: below), in: button)
+        // finishHistoryRequest ended the request, so staleness is judged by panel state, not the token.
+        let shownGeneration = historyToken.start()
+        RunLoop.main.perform(inModes: [.common]) { [weak self] in
+            guard let self, self.historyToken.isCurrent(shownGeneration), self.isVisible, !self.isSending,
+                  self.targetId == requestTarget, self.isHistoryAvailable else { return }
+            let button = self.headerHistoryButton
+            let below = button.isFlipped ? button.bounds.maxY + 4 : button.bounds.minY - 4
+            menu.popUp(positioning: nil, at: NSPoint(x: button.bounds.minX, y: below), in: button)
+        }
     }
 
     /// The History request failed: shows the error line, no menu.
@@ -622,7 +633,7 @@ final class QuickAskPanel: NSPanel, NSTextViewDelegate {
     }
 
     @objc private func historyRowPicked(_ sender: NSMenuItem) {
-        guard let agentId = sender.representedObject as? String else { return }
+        guard isVisible, let agentId = sender.representedObject as? String else { return }
         onPickHistory?(agentId)
     }
 
