@@ -33,6 +33,7 @@ runTimelineSubscriptionTests()
 runQuickAskPanelRouterTests()
 runBotsFetchGateTests()
 runQuickAskNewChatTests()
+runQuickAskHistoryTests()
 
 if failureCount == 0 {
     print("ALL \(testCount) TESTS PASSED")
