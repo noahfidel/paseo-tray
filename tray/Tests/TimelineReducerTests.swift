@@ -267,7 +267,17 @@ func testSeqlessTurnEndAppliedWhenSnapshotStillRunning() {
     expect(failed.rows.count == 2, "testSeqlessTurnEndAppliedWhenSnapshotStillRunning: one error row, no duplicates")
 }
 
+func testHasOlderFromSnapshot() {
+    var state = TimelineState()
+    TimelineReducer.applySnapshot(&state, payload: ["entries": [] as [Any], "hasOlder": true])
+    expect(state.hasOlder, "testHasOlderFromSnapshot: hasOlder true")
+    var other = TimelineState()
+    TimelineReducer.applySnapshot(&other, payload: ["entries": [] as [Any]])
+    expect(!other.hasOlder, "testHasOlderFromSnapshot: missing key is false")
+}
+
 func runTimelineReducerTests() {
+    testHasOlderFromSnapshot()
     testSeqlessTurnEndAppliedWhenSnapshotStillRunning()
     testNotificationUsesMessage()
     testSeqlessFramesNotReplayedAfterSnapshot()

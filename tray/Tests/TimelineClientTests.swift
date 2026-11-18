@@ -244,7 +244,27 @@ func testActiveTurnBehaviorOnFollowUp() {
     expect(sender.messages("send_agent_message_request").last?["activeTurnBehavior"] == nil, "plain watch sends no activeTurnBehavior")
 }
 
+func testTailLimitSticksForTheWholeWatch() {
+    let (client, sender, _) = makeClient()
+    client.watch(agentId: "a", tailLimit: 500)
+    expect(sender.fetches[0]["limit"] as? Int == 500, "tailLimit: first fetch uses 500")
+    client.handle(type: "fetch_agent_timeline_response", payload: snapshotPayload(sender.fetches[0]))
+    client.resubscribe()
+    expect(sender.fetches.count == 2 && sender.fetches[1]["limit"] as? Int == 500, "tailLimit: resubscribe refetch uses 500")
+    client.handle(type: "fetch_agent_timeline_response", payload: snapshotPayload(sender.fetches[1]))
+    client.handle(type: "agent_stream", payload: streamPayload(agentId: "a", seq: 9, text: "gap"))
+    expect(sender.fetches.count == 3 && sender.fetches[2]["limit"] as? Int == 500, "tailLimit: gap refetch uses 500")
+    client.watch(agentId: "b")
+    expect(sender.fetches.last?["limit"] as? Int == TimelineClient.tailLimit, "tailLimit: a new watch resets to 50")
+    client.stopWatching()
+    client.watch(agentId: "c", tailLimit: 500)
+    client.stopWatching()
+    client.watch(agentId: "d")
+    expect(sender.fetches.last?["limit"] as? Int == 50, "tailLimit: watch after stop resets to 50")
+}
+
 func runTimelineClientTests() {
+    testTailLimitSticksForTheWholeWatch()
     testActiveTurnBehaviorOnFollowUp()
     testFailedStopSurfacesError()
     testLostFollowUpSurfacedOnResubscribe()

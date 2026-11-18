@@ -20,6 +20,8 @@ struct TimelineState: Equatable {
     var pendingPermission = false
     var needsRefetch = false
     var hasSnapshot = false
+    /// The server has entries older than the fetched tail.
+    var hasOlder = false
     /// Stream frames (serialized) waiting for a snapshot; replayed by `applySnapshot`.
     var buffered: [Data] = []
     /// Item types already reported as `.unsupported` in the current turn.
@@ -58,6 +60,7 @@ enum TimelineReducer {
         s.epoch = payload["epoch"] as? String
         s.lastSeq = (payload["endCursor"] as? [String: Any])?["seq"] as? Int
         s.hasSnapshot = true
+        s.hasOlder = payload["hasOlder"] as? Bool ?? false
         s.needsRefetch = false
         s.assistantOpen = s.turn == .running
 

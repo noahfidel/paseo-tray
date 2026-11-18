@@ -37,6 +37,8 @@ final class TimelineClient {
     /// Invalidates scheduled retries when the watch changes.
     private var retryToken = 0
     private var activeTurnBehavior: String?
+    /// Entries per tail fetch; kept for the whole watch (retries, reconnects, refetches).
+    private var watchTailLimit = TimelineClient.tailLimit
 
     init(send: @escaping ([String: Any]) -> Bool) {
         self.send = send
@@ -50,8 +52,9 @@ final class TimelineClient {
 
     /// `activeTurnBehavior` (e.g. "steer") rides along on follow-ups so a send never interrupts a
     /// running turn; nil leaves the key out and keeps the server default.
-    func watch(agentId: String, activeTurnBehavior: String? = nil) {
+    func watch(agentId: String, activeTurnBehavior: String? = nil, tailLimit: Int = TimelineClient.tailLimit) {
         releaseSubscription()
+        watchTailLimit = tailLimit
         self.agentId = agentId
         self.activeTurnBehavior = activeTurnBehavior
         state = TimelineState()
@@ -63,6 +66,7 @@ final class TimelineClient {
     func stopWatching() {
         guard agentId != nil else { return }
         agentId = nil
+        watchTailLimit = Self.tailLimit
         fetchRequestId = nil
         cancelRequestId = nil
         pendingMessageIds = []
@@ -326,7 +330,7 @@ final class TimelineClient {
             "agentId": agentId,
             "requestId": requestId,
             "direction": "tail",
-            "limit": Self.tailLimit,
+            "limit": watchTailLimit,
             "projection": "projected",
         ]) {
             fetchRequestId = nil
